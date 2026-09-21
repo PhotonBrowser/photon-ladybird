@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+photon_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export PHOTON_ROOT="$photon_root"
+
+exec cargo run --quiet --locked --manifest-path "$photon_root/Tools/PhotonCLI/Cargo.toml" -- "$@"
