@@ -1,0 +1,7 @@
+version = 1
+
+[[patches]]
+id = "0001"
+file = "ladybird/0001-integrate-photon-build.patch"
+description = "Register the Photon target and Qt Quick dependency"
+area = "Build"
