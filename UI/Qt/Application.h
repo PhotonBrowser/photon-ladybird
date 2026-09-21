@@ -46,7 +46,7 @@ public:
 
     Function<void(URL::URL)> on_open_file;
 
-    BrowserWindow& new_window(Vector<URL::URL> const& initial_urls, WindowConfiguration const& = {}, BrowserWindow::IsPopupWindow is_popup_window = BrowserWindow::IsPopupWindow::No, WebView::IsPrivate = WebView::IsPrivate::No, Tab* parent_tab = nullptr, Optional<Web::PageId> page_index = {}, ShowWindow = ShowWindow::Yes);
+    BrowserWindow& new_window(Vector<URL::URL> const& initial_urls, WindowConfiguration const& = {}, BrowserWindow::IsPopupWindow is_popup_window = BrowserWindow::IsPopupWindow::No, WebView::IsPrivate = WebView::IsPrivate::No, Tab* parent_tab = nullptr, RefPtr<WebView::WebContentClient> page_process = nullptr, Optional<Web::PageId> page_index = {}, ShowWindow = ShowWindow::Yes);
     WindowConfiguration configuration_for_new_window() const;
 
     void open_new_tab();
@@ -78,7 +78,6 @@ public:
     QMenu* history_menu();
     QMenu* inspect_menu();
     QMenu* debug_menu();
-    QMenu* zoom_menu();
     QMenu* help_menu();
 
     QAction* new_tab_action();
@@ -92,6 +91,9 @@ public:
     QAction* open_settings_action();
     QAction* open_downloads_action();
     QAction* find_in_page_action();
+    QAction* zoom_in_action();
+    QAction* zoom_out_action();
+    QAction* reset_zoom_action();
     QAction* quit_action();
 
 private:

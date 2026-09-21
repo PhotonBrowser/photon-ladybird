@@ -35,6 +35,7 @@
 #include <QApplication>
 #include <QCursor>
 #include <QGuiApplication>
+#include <QHBoxLayout>
 #include <QIcon>
 #include <QInputDevice>
 #include <QMenuBar>
@@ -50,6 +51,7 @@
 #include <QVBoxLayout>
 #include <QWheelEvent>
 #include <QWidget>
+#include <QWidgetAction>
 #include <QWindow>
 
 namespace Ladybird {
@@ -210,7 +212,7 @@ static QIcon const& app_icon()
     return icon;
 }
 
-BrowserWindow::BrowserWindow(Vector<URL::URL> const& initial_urls, IsPopupWindow is_popup_window, WebView::IsPrivate is_private, Tab* parent_tab, Optional<Web::PageId> page_index)
+BrowserWindow::BrowserWindow(Vector<URL::URL> const& initial_urls, IsPopupWindow is_popup_window, WebView::IsPrivate is_private, Tab* parent_tab, RefPtr<WebView::WebContentClient> page_process, Optional<Web::PageId> page_index)
     : m_is_private(is_private)
     , m_session(WebView::Application::session_for_new_view(is_private))
     , m_tabs_container(new TabWidget(this))
@@ -251,6 +253,7 @@ BrowserWindow::BrowserWindow(Vector<URL::URL> const& initial_urls, IsPopupWindow
     initialize_application_actions();
     initialize_application_menu();
     initialize_hamburger_menu();
+    update_chrome_style();
 
     m_exit_button = new ExitFullscreenButton { this };
     m_fullscreen_mode = new FullscreenMode { this, m_exit_button };
@@ -280,7 +283,7 @@ BrowserWindow::BrowserWindow(Vector<URL::URL> const& initial_urls, IsPopupWindow
     });
 
     if (parent_tab) {
-        new_child_tab(Web::HTML::ActivateTab::Yes, *parent_tab, AK::move(page_index));
+        new_child_tab(Web::HTML::ActivateTab::Yes, AK::move(page_process), AK::move(page_index));
     } else {
         for (size_t i = 0; i < initial_urls.size(); ++i)
             create_new_tab((i == 0) ? Web::HTML::ActivateTab::Yes : Web::HTML::ActivateTab::No, TabLocation::end());
@@ -333,6 +336,9 @@ void BrowserWindow::initialize_application_actions()
     addAction(application.open_downloads_action());
     addAction(application.open_settings_action());
     addAction(application.find_in_page_action());
+    addAction(application.zoom_in_action());
+    addAction(application.zoom_out_action());
+    addAction(application.reset_zoom_action());
     addAction(application.quit_action());
 
     for (auto const& shortcut : QKeySequence::keyBindings(QKeySequence::StandardKey::FindPrevious)) {
@@ -368,7 +374,6 @@ void BrowserWindow::initialize_application_menu()
     menuBar()->setObjectName("LadybirdMenuBar");
 
     create_menu_bar_window_controls();
-    update_menu_bar_style();
     update_menu_bar_visibility();
 }
 
@@ -377,6 +382,7 @@ void BrowserWindow::initialize_hamburger_menu()
     auto& application = Application::the();
 
     m_hamburger_menu = new QMenu(this);
+    QObject::connect(m_hamburger_menu, &QMenu::aboutToShow, this, &BrowserWindow::update_hamburger_zoom_label);
 
     m_hamburger_menu->addAction(application.new_tab_action());
     m_hamburger_menu->addAction(application.new_window_action());
@@ -389,7 +395,9 @@ void BrowserWindow::initialize_hamburger_menu()
     m_hamburger_menu->addAction(application.open_downloads_action());
     m_hamburger_menu->addSeparator();
 
-    m_hamburger_menu->addMenu(application.zoom_menu()); // FIXME: We should create a nice widget for zoom like other browsers.
+    m_hamburger_menu->addAction(create_hamburger_zoom_actions());
+    m_hamburger_menu->addSeparator();
+
     m_hamburger_menu->addAction(application.find_in_page_action());
     m_hamburger_menu->addSeparator();
 
@@ -400,6 +408,49 @@ void BrowserWindow::initialize_hamburger_menu()
 
     m_hamburger_menu->addMenu(application.help_menu());
     m_hamburger_menu->addAction(application.quit_action());
+}
+
+QAction* BrowserWindow::create_hamburger_zoom_actions()
+{
+    auto& application = Application::the();
+
+    auto* container = new QWidget(m_hamburger_menu);
+    container->setObjectName("LadybirdHamburgerZoomActions");
+
+    auto* layout = new QHBoxLayout(container);
+    layout->setContentsMargins(14, 2, 14, 2);
+    layout->setSpacing(4);
+    container->setLayout(layout);
+
+    auto* label = new QLabel("Zoom", container);
+    layout->addWidget(label);
+
+    auto make_button = [&](QAnyStringView name, QString const& text, QAction* action, int width = 24) {
+        auto* button = new QPushButton(text, container);
+        button->setObjectName(name);
+        button->setFixedSize(width, 24);
+        button->setFlat(true);
+
+        QObject::connect(button, &QPushButton::clicked, action, &QAction::trigger);
+        QObject::connect(action, &QAction::triggered, this, &BrowserWindow::update_hamburger_zoom_label);
+
+        layout->addWidget(button);
+        return button;
+    };
+
+    make_button("LadybirdHamburgerZoomOutButton", "-", application.zoom_out_action());
+    m_zoom_level = make_button("LadybirdHamburgerResetZoomButton", "100%", application.reset_zoom_action(), 50);
+    make_button("LadybirdHamburgerZoomInButton", "+", application.zoom_in_action());
+
+    auto* action = new QWidgetAction(m_hamburger_menu);
+    action->setDefaultWidget(container);
+    return action;
+}
+
+void BrowserWindow::update_hamburger_zoom_label()
+{
+    auto zoom_level = round_to<int>(m_current_tab->view().zoom_level() * 100);
+    m_zoom_level->setText(qformatted("{}%", zoom_level));
 }
 
 void BrowserWindow::update_tabs_display()
@@ -446,17 +497,17 @@ void BrowserWindow::duplicate_tab(Tab& source_tab)
         duplicate.navigate(source_url);
 }
 
-Tab& BrowserWindow::new_child_tab(Web::HTML::ActivateTab activate_tab, Tab& parent, Optional<Web::PageId> page_index)
+Tab& BrowserWindow::new_child_tab(Web::HTML::ActivateTab activate_tab, RefPtr<WebView::WebContentClient> page_process, Optional<Web::PageId> page_index)
 {
-    return create_new_tab(activate_tab, parent, page_index);
+    return create_new_tab(activate_tab, AK::move(page_process), page_index);
 }
 
-Tab& BrowserWindow::create_new_tab(Web::HTML::ActivateTab activate_tab, Tab& parent, Optional<Web::PageId> page_index)
+Tab& BrowserWindow::create_new_tab(Web::HTML::ActivateTab activate_tab, RefPtr<WebView::WebContentClient> page_process, Optional<Web::PageId> page_index)
 {
     if (!page_index.has_value())
         return create_new_tab(activate_tab, TabLocation::end());
 
-    auto* tab = new Tab(this, parent.view().client(), page_index.value());
+    auto* tab = new Tab(this, AK::move(page_process), page_index.value());
 
     // FIXME: Merge with other overload
     if (m_current_tab == nullptr) {
@@ -558,7 +609,7 @@ void BrowserWindow::initialize_tab(Tab* tab)
         }
     });
 
-    tab->view().on_new_web_view = [this, tab](auto activate_tab, Web::HTML::WebViewHints hints, Optional<Web::PageId> page_index) {
+    tab->view().on_new_web_view = [this, tab](auto activate_tab, Web::HTML::WebViewHints hints, WebView::WebContentClient& page_process, Optional<Web::PageId> page_index) {
         if (hints.popup) {
             auto cascaded_configuration = Application::the().configuration_for_new_window();
             WindowConfiguration configuration {
@@ -567,10 +618,10 @@ void BrowserWindow::initialize_tab(Tab* tab)
                 .width = hints.width,
                 .height = hints.height,
             };
-            auto& window = Application::the().new_window({}, configuration, IsPopupWindow::Yes, m_is_private, tab, AK::move(page_index));
+            auto& window = Application::the().new_window({}, configuration, IsPopupWindow::Yes, m_is_private, tab, page_process, AK::move(page_index));
             return window.current_tab()->view().handle();
         }
-        auto& new_tab = new_child_tab(activate_tab, *tab, page_index);
+        auto& new_tab = new_child_tab(activate_tab, page_process, page_index);
         return new_tab.view().handle();
     };
 
@@ -662,7 +713,7 @@ void BrowserWindow::detach_tab_to_new_window(int index, QPoint global_position)
         .maximized = isMaximized(),
     };
 
-    auto& window = Application::the().new_window({}, configuration, IsPopupWindow::No, m_is_private, nullptr, {}, ShowWindow::No);
+    auto& window = Application::the().new_window({}, configuration, IsPopupWindow::No, m_is_private, nullptr, nullptr, {}, ShowWindow::No);
     move_tab_to_window(index, window, 0);
 
     if (configuration.maximized == true)
@@ -900,6 +951,12 @@ void BrowserWindow::tab_favicon_changed(int index, QIcon const& icon)
     m_tabs_container->set_tab_icon(index, icon);
 }
 
+void BrowserWindow::update_chrome_style()
+{
+    menuBar()->setStyleSheet(ChromeStyle::menu_bar_style_sheet(palette()));
+    m_hamburger_menu->setStyleSheet(ChromeStyle::hamburger_style_sheet(palette()));
+}
+
 void BrowserWindow::initialize_tab_buttons(Tab* tab)
 {
     auto index = m_tabs_container->index_of(tab);
@@ -955,11 +1012,6 @@ void BrowserWindow::create_menu_bar_window_controls()
 
         update_menu_bar_window_control_icons();
     }
-}
-
-void BrowserWindow::update_menu_bar_style()
-{
-    menuBar()->setStyleSheet(ChromeStyle::menu_bar_style_sheet(palette()));
 }
 
 void BrowserWindow::update_menu_bar_visibility()
@@ -1433,7 +1485,7 @@ void BrowserWindow::resizeEvent(QResizeEvent* event)
 void BrowserWindow::changeEvent(QEvent* event)
 {
     if (event->type() == QEvent::PaletteChange) {
-        update_menu_bar_style();
+        update_chrome_style();
         update_menu_bar_window_control_icons();
         update_tab_button_icons();
     } else if (event->type() == QEvent::WindowStateChange) {

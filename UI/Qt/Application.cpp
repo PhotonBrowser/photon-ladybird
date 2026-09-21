@@ -233,6 +233,10 @@ public:
                 window->show_find_in_page();
         });
 
+        m_zoom_in_action = create_application_action(*m_application_widget, application.zoom_in_action(), IncludeActionIcon::No);
+        m_zoom_out_action = create_application_action(*m_application_widget, application.zoom_out_action(), IncludeActionIcon::No);
+        m_reset_zoom_action = create_application_action(*m_application_widget, application.reset_zoom_action(), IncludeActionIcon::No);
+
         m_quit_action = new QAction("&Quit", m_application_widget);
         m_quit_action->setShortcuts(QKeySequence::keyBindings(QKeySequence::StandardKey::Quit));
 #if defined(AK_OS_MACOS)
@@ -255,7 +259,6 @@ public:
 
         m_inspect_menu = create_application_menu(*m_application_widget, application.inspect_menu());
         m_debug_menu = create_application_menu(*m_application_widget, application.debug_menu());
-        m_zoom_menu = create_application_menu(*m_application_widget, application.zoom_menu());
 
         m_help_menu = new QMenu("Help", m_application_widget);
         m_help_menu->addAction(create_application_action(*m_application_widget, application.open_about_page_action(), IncludeActionIcon::No));
@@ -369,7 +372,6 @@ private:
     QMenu* m_history_menu { nullptr };
     QMenu* m_inspect_menu { nullptr };
     QMenu* m_debug_menu { nullptr };
-    QMenu* m_zoom_menu { nullptr };
     QMenu* m_help_menu { nullptr };
 
     QAction* m_new_tab_action { nullptr };
@@ -383,6 +385,9 @@ private:
     QAction* m_open_settings_action { nullptr };
     QAction* m_open_downloads_action { nullptr };
     QAction* m_find_in_page_action { nullptr };
+    QAction* m_zoom_in_action { nullptr };
+    QAction* m_zoom_out_action { nullptr };
+    QAction* m_reset_zoom_action { nullptr };
     QAction* m_quit_action { nullptr };
 };
 
@@ -456,9 +461,9 @@ Optional<String> Application::system_font_family() const
 }
 #endif
 
-BrowserWindow& Application::new_window(Vector<URL::URL> const& initial_urls, WindowConfiguration const& configuration, BrowserWindow::IsPopupWindow is_popup_window, WebView::IsPrivate is_private, Tab* parent_tab, Optional<Web::PageId> page_index, ShowWindow show_window)
+BrowserWindow& Application::new_window(Vector<URL::URL> const& initial_urls, WindowConfiguration const& configuration, BrowserWindow::IsPopupWindow is_popup_window, WebView::IsPrivate is_private, Tab* parent_tab, RefPtr<WebView::WebContentClient> page_process, Optional<Web::PageId> page_index, ShowWindow show_window)
 {
-    auto* window = new BrowserWindow(initial_urls, is_popup_window, is_private, parent_tab, move(page_index));
+    auto* window = new BrowserWindow(initial_urls, is_popup_window, is_private, parent_tab, move(page_process), move(page_index));
     set_active_window(*window);
     QObject::connect(window, &QObject::destroyed, m_application.ptr(), [this, window] {
         if (m_active_window == window)
@@ -1271,7 +1276,11 @@ QMenuBar* Application::create_application_menu_bar(ForBrowserWindow for_browser_
         view_menu->addAction(open_next_tab_action());
         view_menu->addAction(open_previous_tab_action());
         view_menu->addSeparator();
-        view_menu->addMenu(zoom_menu());
+
+        auto* zoom_menu = view_menu->addMenu("&Zoom");
+        zoom_menu->addAction(zoom_in_action());
+        zoom_menu->addAction(zoom_out_action());
+        zoom_menu->addAction(reset_zoom_action());
         view_menu->addSeparator();
     }
     view_menu->addMenu(create_application_menu(*view_menu, application.color_scheme_menu()));
@@ -1306,7 +1315,6 @@ DEFINE_APP_MENU_GETTER(QMenu, bookmarks_menu);
 DEFINE_APP_MENU_GETTER(QMenu, history_menu);
 DEFINE_APP_MENU_GETTER(QMenu, inspect_menu);
 DEFINE_APP_MENU_GETTER(QMenu, debug_menu);
-DEFINE_APP_MENU_GETTER(QMenu, zoom_menu);
 DEFINE_APP_MENU_GETTER(QMenu, help_menu);
 DEFINE_APP_MENU_GETTER(QAction, new_tab_action);
 DEFINE_APP_MENU_GETTER(QAction, new_window_action);
@@ -1319,6 +1327,9 @@ DEFINE_APP_MENU_GETTER(QAction, open_file_action);
 DEFINE_APP_MENU_GETTER(QAction, open_settings_action);
 DEFINE_APP_MENU_GETTER(QAction, open_downloads_action);
 DEFINE_APP_MENU_GETTER(QAction, find_in_page_action);
+DEFINE_APP_MENU_GETTER(QAction, zoom_in_action);
+DEFINE_APP_MENU_GETTER(QAction, zoom_out_action);
+DEFINE_APP_MENU_GETTER(QAction, reset_zoom_action);
 DEFINE_APP_MENU_GETTER(QAction, quit_action);
 
 }
