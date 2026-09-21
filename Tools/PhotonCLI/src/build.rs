@@ -1,14 +1,15 @@
 use std::ffi::OsString;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
 use anyhow::Result;
 use chrono::Local;
-use console::style;
 
 use crate::output::BuildDisplay;
 use crate::process::{run_inherited, run_logged};
+use crate::ui;
 
 pub fn build(repository: &Path, preset: &str, verbose: bool, target: Option<&str>) -> Result<i32> {
     let mut command = ladybird_command(repository);
@@ -28,25 +29,30 @@ pub fn run(
     application_args: &[OsString],
 ) -> Result<i32> {
     if !no_build {
-        let code = build(repository, preset, verbose, Some("Ladybird"))?;
+        let code = build(repository, preset, verbose, Some("Photon"))?;
         if code != 0 {
             return Ok(code);
         }
-        println!("{} Starting Photon...", style("→").cyan().bold());
+        ui::step("Starting Photon...");
     } else {
-        println!("{} Starting Photon without building...", style("→").cyan().bold());
+        ui::header("Photon", Some("Run · Release · Qt"));
+        ui::step("Starting Photon without building...");
     }
 
     let mut command = ladybird_command(repository);
-    command.args(["run", "--preset", preset, "--no-build", "Ladybird"]);
+    command.args(["run", "--preset", preset, "--no-build", "Photon"]);
     command.args(application_args);
     run_inherited(&mut command)
 }
 
 pub fn clean(repository: &Path, preset: &str) -> Result<i32> {
-    let mut command = ladybird_command(repository);
-    command.args(["clean", "--preset", preset]);
-    run_inherited(&mut command)
+    let build_directory = repository.join("Build").join(preset_directory(preset));
+    remove_path(&build_directory.join("Photon"))?;
+    remove_path(&build_directory.join("bin/Photon"))?;
+    ui::header("Photon", Some("Clean"));
+    ui::ok("Removed", build_directory.display());
+    ui::hint("Ladybird dependencies and shared Cargo artifacts were preserved.");
+    Ok(0)
 }
 
 pub fn test(repository: &Path, preset: &str, pattern: Option<&str>, verbose: bool) -> Result<i32> {
@@ -93,6 +99,19 @@ fn ladybird_command(repository: &Path) -> Command {
     let mut command = Command::new("python3");
     command.arg(repository.join("Meta/ladybird.py")).current_dir(repository);
     command
+}
+
+fn preset_directory(preset: &str) -> String {
+    preset.to_ascii_lowercase().replace("all_debug", "alldebug")
+}
+
+fn remove_path(path: &Path) -> Result<()> {
+    if path.is_dir() {
+        fs::remove_dir_all(path)?;
+    } else if path.exists() {
+        fs::remove_file(path)?;
+    }
+    Ok(())
 }
 
 fn new_log_path(repository: &Path) -> PathBuf {

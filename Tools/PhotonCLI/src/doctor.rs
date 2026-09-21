@@ -7,6 +7,8 @@ use std::process::Command;
 use anyhow::Result;
 use console::style;
 
+use crate::ui;
+
 const MINIMUM_CMAKE: Version = Version::new(3, 30, 0);
 const FALLBACK_MINIMUM_QT: Version = Version::new(6, 9, 0);
 
@@ -30,9 +32,10 @@ impl std::fmt::Display for Version {
 }
 
 pub fn run(repository: &Path) -> Result<i32> {
-    println!("{}\n", style("Photon development environment").bold());
+    ui::header("Photon", Some("Development environment"));
     let mut blocking_problems = 0;
 
+    ui::section("Toolchain");
     blocking_problems += check_tool("Git", "git", &["--version"], None);
     blocking_problems += check_tool("Rust", "rustc", &["--version"], None);
     blocking_problems += check_tool("Cargo", "cargo", &["--version"], None);
@@ -44,9 +47,12 @@ pub fn run(repository: &Path) -> Result<i32> {
     let cpp_compiler = env::var_os("CXX").unwrap_or_else(|| "c++".into());
     blocking_problems += check_tool_os("C++ compiler", &cpp_compiler, &["--version"], None);
 
+    ui::section("Qt");
     let minimum_qt = qt_requirement(repository).unwrap_or(FALLBACK_MINIMUM_QT);
     blocking_problems += check_qt(minimum_qt);
+    blocking_problems += check_qt_quick();
 
+    ui::section("Build dependencies");
     for (label, program) in [
         ("Python", "python3"),
         ("pkg-config", "pkg-config"),
@@ -59,25 +65,31 @@ pub fn run(repository: &Path) -> Result<i32> {
         blocking_problems += check_tool(label, program, &["--version"], None);
     }
 
+    ui::section("Photon project");
     if repository.join("Meta/ladybird.py").is_file() {
-        print_ok("Ladybird tools", "found");
+        ui::ok("Ladybird tools", "found");
     } else {
-        print_error("Ladybird tools", "Meta/ladybird.py not found");
+        ui::fail("Ladybird tools", "Meta/ladybird.py not found");
         blocking_problems += 1;
     }
 
+    blocking_problems += check_file(repository, "Patch manifest", "Patches/series.toml");
+    blocking_problems += check_file(repository, "Upstream base", "Meta/Photon/upstream.toml");
+    blocking_problems += check_file(repository, "Origin record", "Meta/Photon/origin.toml");
     blocking_problems += check_origin_remote(repository);
+    blocking_problems += check_upstream_remote(repository);
 
+    ui::section("Build directories");
     report_build_directory(repository, "release");
     report_build_directory(repository, "debug");
 
     println!();
     if blocking_problems == 0 {
-        println!("{}", style("Ready to build Photon.").green().bold());
+        println!("  {}", style("Ready to build Photon.").green().bold());
         Ok(0)
     } else {
         println!(
-            "{}",
+            "  {}",
             style(format!(
                 "{blocking_problems} blocking problem(s) found. No packages were changed."
             ))
@@ -95,17 +107,17 @@ fn check_tool(label: &str, program: &str, args: &[&str], minimum: Option<Version
 fn check_tool_os(label: &str, program: &OsStr, args: &[&str], minimum: Option<Version>) -> i32 {
     let output = Command::new(program).args(args).output();
     let Ok(output) = output else {
-        print_error(label, "Not found in PATH");
+        ui::fail(label, "Not found in PATH");
         return 1;
     };
     if !output.status.success() {
-        print_error(label, "Could not determine version");
+        ui::fail(label, "Could not determine version");
         return 1;
     }
 
     let text = combined_output(&output.stdout, &output.stderr);
     let Some(version) = first_version(&text) else {
-        print_error(label, "Could not determine version");
+        ui::fail(label, "Could not determine version");
         return 1;
     };
     if let Some(required) = minimum {
@@ -114,7 +126,7 @@ fn check_tool_os(label: &str, program: &OsStr, args: &[&str], minimum: Option<Ve
             return 1;
         }
     }
-    print_ok(label, &version.to_string());
+    ui::ok(label, version.to_string());
     0
 }
 
@@ -139,12 +151,38 @@ fn check_qt(required: Version) -> i32 {
             print_version_error("Qt", required, version);
             return 1;
         }
-        print_ok("Qt", &version.to_string());
+        ui::ok("Qt", version.to_string());
         return 0;
     }
 
-    print_error("Qt", &format!("Not found (required: Qt >= {required})"));
+    ui::fail("Qt", format!("Not found (required: Qt >= {required})"));
     1
+}
+
+fn check_qt_quick() -> i32 {
+    let output = Command::new("pkg-config")
+        .args(["--modversion", "Qt6QuickWidgets"])
+        .output();
+    let Ok(output) = output else {
+        ui::fail("Qt Quick", "pkg-config could not inspect Qt6QuickWidgets");
+        return 1;
+    };
+    if !output.status.success() {
+        ui::fail("Qt Quick", "Qt6QuickWidgets not found");
+        return 1;
+    }
+    ui::ok("Qt Quick", String::from_utf8_lossy(&output.stdout).trim());
+    0
+}
+
+fn check_file(repository: &Path, label: &str, relative: &str) -> i32 {
+    if repository.join(relative).is_file() {
+        ui::ok(label, relative);
+        0
+    } else {
+        ui::fail(label, format!("{relative} not found"));
+        1
+    }
 }
 
 fn check_origin_remote(repository: &Path) -> i32 {
@@ -153,16 +191,16 @@ fn check_origin_remote(repository: &Path) -> i32 {
         .current_dir(repository)
         .output();
     let Ok(output) = output else {
-        print_error("Origin remote", "could not inspect Git remotes");
+        ui::fail("Origin remote", "could not inspect Git remotes");
         return 1;
     };
     if !output.status.success() {
-        print_error("Origin remote", "not configured (run `photon remote set-origin <url>`)");
+        ui::fail("Origin remote", "not configured (run `photon remote set-origin <url>`)");
         return 1;
-    }
+    };
     let url = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     if url.is_empty() {
-        print_error("Origin remote", "not configured");
+        ui::fail("Origin remote", "not configured");
         return 1;
     }
 
@@ -181,20 +219,33 @@ fn check_origin_remote(repository: &Path) -> i32 {
                     .strip_prefix("git@github.com:")
                     .map(|rest| format!("https://github.com/{rest}"))
                     .unwrap_or_else(|| value.to_owned());
-                https
-                    .trim_end_matches(".git")
-                    .trim_matches('/')
-                    .to_ascii_lowercase()
+                https.trim_end_matches(".git").trim_matches('/').to_ascii_lowercase()
             };
             if normalize(&url) != normalize(&expected) {
-                print_error("Origin remote", &format!("{url} (expected {expected})"));
+                ui::fail("Origin remote", format!("{url} (expected {expected})"));
                 return 1;
             }
         }
     }
 
-    print_ok("Origin remote", &url);
+    ui::ok("Origin remote", &url);
     0
+}
+
+fn check_upstream_remote(repository: &Path) -> i32 {
+    let output = Command::new("git").args(["remote"]).current_dir(repository).output();
+    let Ok(output) = output else {
+        ui::fail("Upstream remote", "could not inspect Git remotes");
+        return 1;
+    };
+    let remotes = String::from_utf8_lossy(&output.stdout);
+    if output.status.success() && remotes.lines().any(|remote| remote == "upstream") {
+        ui::ok("Upstream remote", "configured");
+        0
+    } else {
+        ui::fail("Upstream remote", "not configured");
+        1
+    }
 }
 
 fn qt_requirement(repository: &Path) -> Option<Version> {
@@ -207,14 +258,9 @@ fn qt_requirement(repository: &Path) -> Option<Version> {
 fn report_build_directory(repository: &Path, preset: &str) {
     let relative = format!("Build/{preset}");
     if repository.join(&relative).is_dir() {
-        print_ok("Build directory", &relative);
+        ui::ok("Build directory", &relative);
     } else {
-        println!(
-            "{} {:<15} {} (not created)",
-            style("•").dim(),
-            "Build directory",
-            relative
-        );
+        ui::note("Build directory", format!("{relative} (not created)"));
     }
 }
 
@@ -248,18 +294,8 @@ fn combined_output(stdout: &[u8], stderr: &[u8]) -> String {
     )
 }
 
-fn print_ok(label: &str, detail: &str) {
-    println!("{} {:<15} {detail}", style("✓").green().bold(), label);
-}
-
-fn print_error(label: &str, detail: &str) {
-    println!("{} {:<15} {detail}", style("✗").red().bold(), label);
-}
-
 fn print_version_error(label: &str, required: Version, found: Version) {
-    println!("{} {label}", style("✗").red().bold());
-    println!("  Required: {label} >= {required}");
-    println!("  Found: {found}");
+    ui::fail(label, format!("{found} (required >= {required})"));
 }
 
 #[cfg(test)]

@@ -4,6 +4,8 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
+use crate::ui;
+
 const ORIGIN_TOML: &str = "Meta/Photon/origin.toml";
 const UPSTREAM_DOC: &str = "Documentation/Photon/Upstream.md";
 
@@ -12,24 +14,23 @@ pub fn status(repository: &Path) -> Result<i32> {
     let fetch = git_remote_url(repository, false)?;
     let push = git_remote_url(repository, true)?;
 
-    println!("Canonical origin  {}", canonical.as_deref().unwrap_or("(not recorded)"));
-    println!(
-        "Origin fetch      {}",
-        fetch.as_deref().unwrap_or("(missing)")
-    );
-    println!("Origin push       {}", push.as_deref().unwrap_or("(missing)"));
+    ui::header("Photon", Some("Origin"));
+    ui::kv("Canonical", canonical.as_deref().unwrap_or("(not recorded)"));
+    ui::kv("Fetch", fetch.as_deref().unwrap_or("(missing)"));
+    ui::kv("Push", push.as_deref().unwrap_or("(missing)"));
 
     match (&canonical, &fetch) {
         (Some(canonical), Some(fetch)) if same_repository(canonical, fetch) => {
-            println!("Relationship      in sync");
+            ui::success(format!("In sync · {fetch}"));
             Ok(0)
         }
         (Some(_), Some(_)) => {
-            println!("Relationship      diverged (run `photon remote set-origin <url>`)");
+            ui::failure("Origin diverged from the canonical record.");
+            ui::hint("Run `photon remote set-origin <url>` to fix it.");
             Ok(1)
         }
         _ => {
-            println!("Relationship      unknown");
+            ui::note("Relationship", "unknown");
             Ok(1)
         }
     }
@@ -48,18 +49,14 @@ pub fn set_origin(repository: &Path, value: Option<&str>, ssh: bool, https: bool
     update_origin_toml(repository, &canonical)?;
     update_upstream_doc(repository, &canonical)?;
 
-    println!("Origin fetch/push  {target}");
-    println!("Canonical record  {canonical}");
-    println!("Updated           {ORIGIN_TOML}, {UPSTREAM_DOC}");
+    ui::header("Photon", Some("Origin updated"));
+    ui::kv("Fetch/push", &target);
+    ui::kv("Canonical", &canonical);
+    ui::hint(format!("Updated {ORIGIN_TOML}, {UPSTREAM_DOC}"));
     Ok(0)
 }
 
-fn resolve_target(
-    value: Option<&str>,
-    ssh: bool,
-    https: bool,
-    existing: Option<&str>,
-) -> Result<String> {
+fn resolve_target(value: Option<&str>, ssh: bool, https: bool, existing: Option<&str>) -> Result<String> {
     if let Some(raw) = value {
         let raw = raw.trim();
         if raw.is_empty() {
@@ -137,7 +134,11 @@ pub(crate) fn to_ssh(url: &str) -> String {
 }
 
 fn ensure_git_suffix(url: &str) -> String {
-    if url.ends_with(".git") { url.to_owned() } else { format!("{url}.git") }
+    if url.ends_with(".git") {
+        url.to_owned()
+    } else {
+        format!("{url}.git")
+    }
 }
 
 fn same_repository(first: &str, second: &str) -> bool {
@@ -211,7 +212,7 @@ fn update_origin_toml(repository: &Path, canonical: &str) -> Result<()> {
 fn update_upstream_doc(repository: &Path, canonical: &str) -> Result<()> {
     let path = repository.join(UPSTREAM_DOC);
     let Ok(source) = fs::read_to_string(&path) else {
-        println!("Skipped           {UPSTREAM_DOC} (not present)");
+        ui::hint(format!("Skipped {UPSTREAM_DOC} (not present)"));
         return Ok(());
     };
     let mut updated = false;
@@ -253,8 +254,7 @@ mod tests {
     #[test]
     fn shorthand_preserves_ssh_when_origin_uses_ssh() {
         let expanded =
-            expand_shorthand("PhotonBrowser/photon-ladybird", Some("git@github.com:OldOrg/old.git"))
-                .unwrap();
+            expand_shorthand("PhotonBrowser/photon-ladybird", Some("git@github.com:OldOrg/old.git")).unwrap();
 
         assert_eq!(expanded, "git@github.com:PhotonBrowser/photon-ladybird");
     }
@@ -285,10 +285,20 @@ mod tests {
 
     #[test]
     fn protocol_flags_convert_the_existing_origin() {
-        let ssh = resolve_target(None, true, false, Some("https://github.com/PhotonBrowser/photon-ladybird.git"))
-            .unwrap();
-        let https = resolve_target(None, false, true, Some("git@github.com:PhotonBrowser/photon-ladybird.git"))
-            .unwrap();
+        let ssh = resolve_target(
+            None,
+            true,
+            false,
+            Some("https://github.com/PhotonBrowser/photon-ladybird.git"),
+        )
+        .unwrap();
+        let https = resolve_target(
+            None,
+            false,
+            true,
+            Some("git@github.com:PhotonBrowser/photon-ladybird.git"),
+        )
+        .unwrap();
 
         assert_eq!(ssh, "git@github.com:PhotonBrowser/photon-ladybird.git");
         assert_eq!(https, "https://github.com/PhotonBrowser/photon-ladybird.git");

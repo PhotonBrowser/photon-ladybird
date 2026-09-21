@@ -6,6 +6,7 @@ use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::process::ProcessOutcome;
+use crate::ui;
 
 const FAILURE_TAIL_LINES: usize = 16;
 
@@ -26,9 +27,9 @@ pub struct BuildDisplay {
 
 impl BuildDisplay {
     pub fn new(label: &'static str, preset: &str, verbose: bool, log_path: &Path) -> Self {
-        println!("{}\n", style("Photon").bold());
-        println!("  {} · Qt", preset);
-        println!("Log: {}\n", log_path.display());
+        ui::header("Photon", Some(&format!("{label} · {preset} · Qt")));
+        ui::kv("Log", log_path.display());
+        println!();
 
         let progress = ProgressBar::new_spinner();
         progress.set_style(
@@ -58,7 +59,7 @@ impl BuildDisplay {
             if !self.has_exact_progress {
                 self.progress.set_style(
                     ProgressStyle::with_template(
-                        "{spinner:.cyan} {msg}\n  {pos} / {len} targets\n  {wide_bar:.cyan/blue}",
+                        "{spinner:.cyan} {msg}\n  {pos}/{len} targets · {percent}% · {elapsed_precise}\n  {wide_bar:.cyan/blue}",
                     )
                     .unwrap_or_else(|_| ProgressStyle::default_bar()),
                 );
@@ -77,26 +78,31 @@ impl BuildDisplay {
         self.progress.finish_and_clear();
         if outcome.code == 0 {
             println!(
-                "{} {} complete\n  {}",
+                "{} {} · {}",
                 style("✓").green().bold(),
                 self.label.trim_end_matches("ing Photon"),
-                format_duration(elapsed)
+                style(format_duration(elapsed)).dim()
             );
+            ui::hint(format!("Log: {}", self.log_path.display()));
             return;
         }
 
-        eprintln!("{} {}", style("✗").red().bold(), self.label);
+        eprintln!(
+            "{} {} · exited with code {}",
+            style("✗").red().bold(),
+            self.label,
+            outcome.code
+        );
         if let Some(target) = target {
-            eprintln!("\nTarget: {target}");
+            eprintln!("  {} {target}", style("Target").dim());
         }
-        eprintln!("Command exited with code {}", outcome.code);
         if !outcome.last_lines.is_empty() {
-            eprintln!("\nLast output:");
+            eprintln!("\n  {}", style("Last output").bold());
             for line in useful_tail(&outcome.last_lines) {
-                eprintln!("{line}");
+                eprintln!("    {line}");
             }
         }
-        eprintln!("\nFull log:\n{}", self.log_path.display());
+        eprintln!("\n  {} {}", style("Full log").dim(), self.log_path.display());
     }
 }
 
