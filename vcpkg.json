@@ -181,6 +181,11 @@
       "default-features": false
     },
     {
+      "name": "qtdeclarative",
+      "platform": "windows | freebsd",
+      "default-features": false
+    },
+    {
       "name": "sdl3",
       "default-features": false
     },
