@@ -105,7 +105,10 @@ fn spawn_reader(reader: impl Read + Send + 'static, stream: Stream, sender: mpsc
             let Ok(read) = reader.read_until(b'\n', &mut bytes) else {
                 break;
             };
-            if read == 0 || sender.send(Event::Output(stream, bytes)).is_err() {
+            if read == 0 {
+                break;
+            }
+            if sender.send(Event::Output(stream, bytes)).is_err() {
                 return;
             }
         }
