@@ -2,6 +2,7 @@ mod build;
 mod doctor;
 mod output;
 mod process;
+mod remote;
 
 use std::env;
 use std::ffi::OsString;
@@ -30,6 +31,32 @@ enum Command {
     Test(TestArgs),
     /// Check the local Photon development environment
     Doctor,
+    /// Inspect or update the Photon origin remote
+    Remote {
+        #[command(subcommand)]
+        command: RemoteCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum RemoteCommand {
+    /// Show the canonical origin and the configured git remote
+    Status,
+    /// Point origin at a new repository and update managed files
+    SetOrigin(SetOriginArgs),
+}
+
+#[derive(Debug, Args)]
+struct SetOriginArgs {
+    /// Git URL or owner/repo shorthand (e.g. PhotonBrowser/photon-ladybird).
+    /// Omit with --ssh/--https to convert the current origin in place.
+    repository: Option<String>,
+    /// Use the git@github.com: SSH form for the git remote
+    #[arg(long, conflicts_with = "https")]
+    ssh: bool,
+    /// Use the https://github.com/ form for the git remote
+    #[arg(long, conflicts_with = "ssh")]
+    https: bool,
 }
 
 #[derive(Debug, Args)]
@@ -90,6 +117,12 @@ fn run() -> Result<i32> {
         Command::Clean => build::clean(&repository, "Release"),
         Command::Test(args) => build::test(&repository, "Release", args.pattern.as_deref(), args.verbose),
         Command::Doctor => doctor::run(&repository),
+        Command::Remote {
+            command: RemoteCommand::Status,
+        } => remote::status(&repository),
+        Command::Remote {
+            command: RemoteCommand::SetOrigin(args),
+        } => remote::set_origin(&repository, args.repository.as_deref(), args.ssh, args.https),
     }
 }
 

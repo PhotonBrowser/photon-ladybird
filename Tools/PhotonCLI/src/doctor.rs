@@ -66,6 +66,8 @@ pub fn run(repository: &Path) -> Result<i32> {
         blocking_problems += 1;
     }
 
+    blocking_problems += check_origin_remote(repository);
+
     report_build_directory(repository, "release");
     report_build_directory(repository, "debug");
 
@@ -143,6 +145,56 @@ fn check_qt(required: Version) -> i32 {
 
     print_error("Qt", &format!("Not found (required: Qt >= {required})"));
     1
+}
+
+fn check_origin_remote(repository: &Path) -> i32 {
+    let output = Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(repository)
+        .output();
+    let Ok(output) = output else {
+        print_error("Origin remote", "could not inspect Git remotes");
+        return 1;
+    };
+    if !output.status.success() {
+        print_error("Origin remote", "not configured (run `photon remote set-origin <url>`)");
+        return 1;
+    }
+    let url = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if url.is_empty() {
+        print_error("Origin remote", "not configured");
+        return 1;
+    }
+
+    if let Ok(canonical) = fs::read_to_string(repository.join("Meta/Photon/origin.toml")) {
+        let expected = canonical.lines().find_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            if key.trim() == "repository" {
+                Some(value.trim().trim_matches('"').to_owned())
+            } else {
+                None
+            }
+        });
+        if let Some(expected) = expected {
+            let normalize = |value: &str| {
+                let https = value
+                    .strip_prefix("git@github.com:")
+                    .map(|rest| format!("https://github.com/{rest}"))
+                    .unwrap_or_else(|| value.to_owned());
+                https
+                    .trim_end_matches(".git")
+                    .trim_matches('/')
+                    .to_ascii_lowercase()
+            };
+            if normalize(&url) != normalize(&expected) {
+                print_error("Origin remote", &format!("{url} (expected {expected})"));
+                return 1;
+            }
+        }
+    }
+
+    print_ok("Origin remote", &url);
+    0
 }
 
 fn qt_requirement(repository: &Path) -> Option<Version> {
