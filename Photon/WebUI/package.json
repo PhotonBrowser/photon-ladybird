@@ -1,15 +1,24 @@
 {
   "name": "photon-web-ui",
   "private": true,
+  "type": "module",
   "scripts": {
-    "build": "esbuild src/main.tsx --bundle --format=iife --minify --outfile=dist/bundle.js",
-    "typecheck": "tsc --noEmit"
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc -b",
+    "lint": "biome lint src vite.config.ts",
+    "format": "biome format --write src vite.config.ts",
+    "format:check": "biome format src vite.config.ts"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.14",
+    "@types/node": "^26.6.2",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "esbuild": "^0.25.0",
-    "typescript": "^5.7.0"
+    "@vitejs/plugin-react": "^6.1.1",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.0",
+    "vite-plugin-singlefile": "^2.3.3"
   },
   "dependencies": {
     "react": "^19.3.0",

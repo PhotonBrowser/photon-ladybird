@@ -1,13 +1,7 @@
 {
-  "compilerOptions": {
-    "strict": true,
-    "target": "ES2020",
-    "module": "ES2020",
-    "moduleResolution": "Bundler",
-    "lib": ["DOM", "ES2020"],
-    "jsx": "react-jsx",
-    "types": [],
-    "noEmit": true
-  },
-  "include": ["src/**/*.ts", "src/**/*.tsx"]
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.app.json" },
+    { "path": "./tsconfig.node.json" }
+  ]
 }

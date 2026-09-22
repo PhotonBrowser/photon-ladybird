@@ -11,6 +11,32 @@ set(CMAKE_AUTORCC ON)
 
 import_rust_crate(MANIFEST_PATH Rust/Cargo.toml CRATE_NAME photon_core)
 
+find_program(PHOTON_NPM_EXECUTABLE npm REQUIRED)
+set(PHOTON_WEBUI_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/WebUI")
+set(PHOTON_WEBUI_DIST_INDEX "${PHOTON_WEBUI_SOURCE_DIR}/dist/index.html")
+file(GLOB_RECURSE PHOTON_WEBUI_SOURCES CONFIGURE_DEPENDS
+    "${PHOTON_WEBUI_SOURCE_DIR}/src/*"
+)
+list(APPEND PHOTON_WEBUI_SOURCES
+    "${PHOTON_WEBUI_SOURCE_DIR}/index.html"
+    "${PHOTON_WEBUI_SOURCE_DIR}/package.json"
+    "${PHOTON_WEBUI_SOURCE_DIR}/package-lock.json"
+    "${PHOTON_WEBUI_SOURCE_DIR}/tsconfig.json"
+    "${PHOTON_WEBUI_SOURCE_DIR}/tsconfig.app.json"
+    "${PHOTON_WEBUI_SOURCE_DIR}/tsconfig.node.json"
+    "${PHOTON_WEBUI_SOURCE_DIR}/vite.config.ts"
+)
+add_custom_command(
+    OUTPUT "${PHOTON_WEBUI_DIST_INDEX}"
+    COMMAND "${PHOTON_NPM_EXECUTABLE}" run build
+    WORKING_DIRECTORY "${PHOTON_WEBUI_SOURCE_DIR}"
+    DEPENDS ${PHOTON_WEBUI_SOURCES}
+    COMMENT "Building Photon Web UI with Vite"
+    VERBATIM
+)
+add_custom_target(photon_webui_assets DEPENDS "${PHOTON_WEBUI_DIST_INDEX}")
+set_source_files_properties("${PHOTON_WEBUI_DIST_INDEX}" PROPERTIES GENERATED TRUE)
+
 qt_add_executable(photon
     App/main.cpp
     Bridge/BrowserView.cpp
@@ -35,9 +61,7 @@ qt_add_resources(photon photon_qml
         UI/components/BrowserSurface.qml
         UI/components/NavigationBar.qml
         UI/components/NavigationButton.qml
-        WebUI/index.html
-        WebUI/dist/bundle.js
-        WebUI/dist/styles.css
+        WebUI/dist/index.html
 )
 
 target_include_directories(photon PRIVATE
@@ -121,5 +145,5 @@ if (HAS_DIRECTX)
 endif()
 
 set_target_properties(photon PROPERTIES OUTPUT_NAME Photon)
-add_dependencies(photon ${ladybird_helper_processes} ladybird_build_resource_files)
+add_dependencies(photon photon_webui_assets ${ladybird_helper_processes} ladybird_build_resource_files)
 add_custom_target(Photon DEPENDS photon)

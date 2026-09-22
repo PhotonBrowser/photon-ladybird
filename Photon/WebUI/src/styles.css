@@ -1,10 +1,76 @@
-html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; font: 14px sans-serif; }
-body { pointer-events: none; }
-button, input, form, .toolbar, .popover { pointer-events: auto; }
-.toolbar { display: flex; gap: 6px; align-items: center; padding: 8px; height: 42px; box-sizing: border-box; background: rgba(245, 247, 250, .96); border-bottom: 1px solid #cbd2dc; }
-button, input { border: 1px solid #b7c0cc; border-radius: 6px; background: white; padding: 5px 9px; }
-button:hover { background: #e8eef8; } button:disabled { opacity: .45; }
-form { flex: 1; } input { width: 100%; box-sizing: border-box; }
-#status { min-width: 70px; color: #546171; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.popover { position: absolute; top: 62px; right: 18px; width: 250px; padding: 16px; border: 1px solid #9aa8ba; border-radius: 10px; background: #fff; box-shadow: 0 10px 28px rgba(20, 30, 45, .25); opacity: 0; transform: translateY(-6px); transition: opacity .14s ease, transform .14s ease; }
-.popover.open { opacity: 1; transform: translateY(0); }
+html,
+body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: transparent;
+    font: 14px sans-serif;
+}
+body {
+    pointer-events: none;
+}
+button,
+input,
+form,
+.toolbar,
+.popover {
+    pointer-events: auto;
+}
+.toolbar {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    padding: 8px;
+    height: 42px;
+    box-sizing: border-box;
+    background: rgba(245, 247, 250, 0.96);
+    border-bottom: 1px solid #cbd2dc;
+}
+button,
+input {
+    border: 1px solid #b7c0cc;
+    border-radius: 6px;
+    background: white;
+    padding: 5px 9px;
+}
+button:hover {
+    background: #e8eef8;
+}
+button:disabled {
+    opacity: 0.45;
+}
+form {
+    flex: 1;
+}
+input {
+    width: 100%;
+    box-sizing: border-box;
+}
+#status {
+    min-width: 70px;
+    color: #546171;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.popover {
+    position: absolute;
+    top: 62px;
+    right: 18px;
+    width: 250px;
+    padding: 16px;
+    border: 1px solid #9aa8ba;
+    border-radius: 10px;
+    background: #fff;
+    box-shadow: 0 10px 28px rgba(20, 30, 45, 0.25);
+    opacity: 0;
+    transform: translateY(-6px);
+    transition:
+        opacity 0.14s ease,
+        transform 0.14s ease;
+}
+.popover.open {
+    opacity: 1;
+    transform: translateY(0);
+}

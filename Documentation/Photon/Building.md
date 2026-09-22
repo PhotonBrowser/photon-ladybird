@@ -18,4 +18,4 @@ Use `./photon run --no-build` to launch an existing binary. `./photon clean` rem
 
 The default preset is `Release`. Use `./photon build --debug` for a Debug build.
 
-The React Web UI is the default frontend. Its bundle is built with Node tooling during development only; Photon runtime startup uses packaged static resources and does not start Node. `--ui qml` remains as a temporary compatibility fallback while the QML implementation is deprecated. See [WebUI.md](WebUI.md).
+The React Web UI is the default frontend. CMake runs the Vite production build when its source or configuration is newer than `Photon/WebUI/dist/index.html`, then packages that static HTML resource into Photon. Node is a build-time dependency and is not started when launching an up-to-date binary. For standalone development and explicit bundle checks, see [WebUI.md](WebUI.md). `--ui qml` remains as a temporary compatibility fallback while the QML implementation is deprecated.

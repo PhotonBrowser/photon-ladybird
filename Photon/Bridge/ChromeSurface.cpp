@@ -45,13 +45,10 @@ ChromeSurface::~ChromeSurface()
 
 void ChromeSurface::load(BrowserView const& browser)
 {
-    auto html = resource(QStringLiteral(":/Photon/WebUI/index.html"));
-    auto styles = resource(QStringLiteral(":/Photon/WebUI/dist/styles.css"));
-    auto script = resource(QStringLiteral(":/Photon/WebUI/dist/bundle.js"));
-    if (html.isEmpty() || styles.isEmpty() || script.isEmpty())
+    auto html = resource(QStringLiteral(":/Photon/WebUI/dist/index.html"));
+    if (html.isEmpty())
         return;
 
-    html.replace("/* PHOTON_STYLES */", styles);
     auto initial_state = QJsonDocument(QJsonObject {
                                            { QStringLiteral("url"), browser.url() },
                                            { QStringLiteral("title"), browser.title() },
@@ -60,8 +57,11 @@ void ChromeSurface::load(BrowserView const& browser)
                                            { QStringLiteral("canGoForward"), browser.can_go_forward() },
                                        })
                              .toJson(QJsonDocument::Compact);
-    auto configured_script = QByteArray("window.__photonInitialState=") + initial_state + ";" + script;
-    html.replace("/* PHOTON_SCRIPT */", configured_script);
+    auto head_end = html.indexOf("</head>");
+    if (head_end < 0)
+        return;
+    auto initial_state_script = QByteArrayLiteral("<script>window.__photonInitialState=") + initial_state + QByteArrayLiteral(";</script>");
+    html.insert(head_end, initial_state_script);
     auto document = QString::fromUtf8(html).toUtf8();
     m_view->load_html({ document.constData(), static_cast<size_t>(document.size()) });
 }

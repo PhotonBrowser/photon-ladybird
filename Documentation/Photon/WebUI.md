@@ -8,7 +8,7 @@ The React/TypeScript Web UI is Photon’s default frontend. QML remains availabl
 ./photon run --ui qml       # deprecated QML fallback
 ```
 
-React and TypeScript are bundled at build time with esbuild and loaded as static HTML, CSS, and JavaScript at runtime. Photon does not require Node to launch. The runtime surface remains an ordinary Ladybird `WebContentView`; React is only a bundle-time implementation detail of the privileged chrome document.
+React and TypeScript use a conventional Vite project. Vite and Node are build-time tools only; Photon loads the static `Photon/WebUI/dist/index.html` resource at runtime. The production build inlines its JavaScript and CSS into that HTML file so the native internal-document loader does not need an HTTP server or a Node process.
 
 ## Composition
 
@@ -49,13 +49,22 @@ interface PhotonApi {
 
 ## Build
 
+Standalone UI development:
+
 ```bash
 cd Photon/WebUI
 npm install
-npm run typecheck
-npm run build
-cd ../..
-./photon build
+npm run dev
 ```
 
-The generated bundle is packaged into Photon. Runtime startup does not start Node.
+The Vite server is for UI-only work. The toolbar, address editor, and popover render there, but navigation commands require Photon’s native `photon-command://` handler; the dev page intentionally has no substitute bridge.
+
+Production bundle:
+
+```bash
+cd Photon/WebUI
+npm run typecheck
+npm run build
+```
+
+Vite writes `dist/index.html`. `vite.config.ts` uses a relative base for embedding and `vite-plugin-singlefile` to inline the built assets. `Photon/CMakeLists.txt` tracks the WebUI source/configuration files as build dependencies, runs `npm run build` only when the output is stale, and packages `dist/index.html` as a Qt resource. `ChromeSurface` reads that built HTML and injects the initial browser state before loading it with Ladybird's internal `load_html` path. Starting an up-to-date Photon executable does not invoke Node.
