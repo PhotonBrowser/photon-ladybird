@@ -1,0 +1,153 @@
+diff --git a/Services/WebContent/ConnectionFromClient.cpp b/Services/WebContent/ConnectionFromClient.cpp
+index 536c88931c..fbf8a7f901 100644
+--- a/Services/WebContent/ConnectionFromClient.cpp
++++ b/Services/WebContent/ConnectionFromClient.cpp
+@@ -2815,6 +2815,12 @@ void ConnectionFromClient::set_preferred_motion(Web::PageId page_id, Web::CSS::P
+         page->set_preferred_motion(motion);
+ }
+ 
++void ConnectionFromClient::set_transparent_background(Web::PageId page_id, bool transparent)
++{
++    if (auto page = this->page(page_id); page.has_value())
++        page->set_transparent_background(transparent);
++}
++
+ void ConnectionFromClient::set_preferred_languages(Web::PageId, Vector<String> preferred_languages)
+ {
+     // FIXME: Whenever the user agent needs to make the navigator.languages attribute of a Window or WorkerGlobalScope
+diff --git a/Services/WebContent/ConnectionFromClient.h b/Services/WebContent/ConnectionFromClient.h
+index afd2804391..908b147a7f 100644
+--- a/Services/WebContent/ConnectionFromClient.h
++++ b/Services/WebContent/ConnectionFromClient.h
+@@ -228,6 +228,7 @@ private:
+     virtual void set_preferred_color_scheme(Web::PageId page_id, Web::CSS::PreferredColorScheme) override;
+     virtual void set_preferred_contrast(Web::PageId page_id, Web::CSS::PreferredContrast) override;
+     virtual void set_preferred_motion(Web::PageId page_id, Web::CSS::PreferredMotion) override;
++    virtual void set_transparent_background(Web::PageId page_id, bool transparent) override;
+     virtual void set_preferred_languages(Web::PageId page_id, Vector<String>) override;
+     virtual void set_browsing_behavior(Web::PageId page_id, WebView::BrowsingBehavior) override;
+     virtual void set_enable_global_privacy_control(Web::PageId page_id, bool) override;
+diff --git a/Services/WebContent/PageClient.cpp b/Services/WebContent/PageClient.cpp
+index 479d0a7462..e88c176b6e 100644
+--- a/Services/WebContent/PageClient.cpp
++++ b/Services/WebContent/PageClient.cpp
+@@ -416,6 +416,17 @@ void PageClient::set_preferred_motion(Web::CSS::PreferredMotion motion)
+     page().invalidate_style_for_preference_change();
+ }
+ 
++void PageClient::set_transparent_background(bool transparent)
++{
++    if (m_use_transparent_background == transparent)
++        return;
++
++    m_use_transparent_background = transparent;
++    if (page().has_local_traversable())
++        page().local_traversable()->set_needs_repaint();
++    request_frame();
++}
++
+ void PageClient::set_is_scripting_enabled(bool is_scripting_enabled)
+ {
+     page().set_is_scripting_enabled(is_scripting_enabled);
+diff --git a/Services/WebContent/PageClient.h b/Services/WebContent/PageClient.h
+index 92d2a11736..065d462833 100644
+--- a/Services/WebContent/PageClient.h
++++ b/Services/WebContent/PageClient.h
+@@ -87,6 +87,7 @@ public:
+     void set_preferred_color_scheme(Web::CSS::PreferredColorScheme);
+     void set_preferred_contrast(Web::CSS::PreferredContrast);
+     void set_preferred_motion(Web::CSS::PreferredMotion);
++    void set_transparent_background(bool);
+     virtual void set_has_focus(bool) override;
+     void set_window_handle(Utf16String);
+     void run_webdriver_user_prompt_handling(u64 request_id);
+@@ -207,6 +208,7 @@ private:
+     virtual Web::CSS::PreferredColorScheme preferred_color_scheme() const override { return m_preferred_color_scheme; }
+     virtual Web::CSS::PreferredContrast preferred_contrast() const override { return m_preferred_contrast; }
+     virtual Web::CSS::PreferredMotion preferred_motion() const override { return m_preferred_motion; }
++    virtual bool should_use_transparent_canvas() const override { return m_use_transparent_background; }
+     virtual void request_frame() override;
+     virtual void rendering_opportunity(i64 frame_time_nanoseconds, double frame_interval_milliseconds) override;
+     virtual void will_begin_rendering_update() override;
+@@ -374,6 +376,7 @@ private:
+     Web::CSS::PreferredColorScheme m_preferred_color_scheme { Web::CSS::PreferredColorScheme::Auto };
+     Web::CSS::PreferredContrast m_preferred_contrast { Web::CSS::PreferredContrast::NoPreference };
+     Web::CSS::PreferredMotion m_preferred_motion { Web::CSS::PreferredMotion::NoPreference };
++    bool m_use_transparent_background { false };
+ 
+     Core::AnonymousBuffer m_document_cookie_version_buffer;
+ 
+diff --git a/Services/WebContent/WebContentServer.ipc b/Services/WebContent/WebContentServer.ipc
+index 81f3283177..16946d7fee 100644
+--- a/Services/WebContent/WebContentServer.ipc
++++ b/Services/WebContent/WebContentServer.ipc
+@@ -225,6 +225,7 @@ endpoint WebContentServer routed by Web::PageId page_id
+     set_preferred_color_scheme(Web::PageId page_id, Web::CSS::PreferredColorScheme color_scheme) =|
+     set_preferred_contrast(Web::PageId page_id, Web::CSS::PreferredContrast contrast) =|
+     set_preferred_motion(Web::PageId page_id, Web::CSS::PreferredMotion motion) =|
++    set_transparent_background(Web::PageId page_id, bool transparent) =|
+     set_preferred_languages(Web::PageId page_id, Vector<String> preferred_languages) =|
+     set_browsing_behavior(Web::PageId page_id, WebView::BrowsingBehavior browsing_behavior) =|
+     set_enable_global_privacy_control(Web::PageId page_id, bool enable) =|
+diff --git a/UI/Qt/WebContentView.cpp b/UI/Qt/WebContentView.cpp
+index c61eac1816..bc02443962 100644
+--- a/UI/Qt/WebContentView.cpp
++++ b/UI/Qt/WebContentView.cpp
+@@ -863,15 +863,18 @@ void WebContentView::paintEvent(QPaintEvent*)
+     }
+ 
+     if (bitmap) {
+-        QImage q_image(bitmap->scanline_u8(0), bitmap->width(), bitmap->height(), bitmap->pitch(), QImage::Format_RGB32);
++        auto format = bitmap->format() == Gfx::BitmapFormat::BGRA8888
++            ? QImage::Format_ARGB32_Premultiplied
++            : QImage::Format_RGB32;
++        QImage q_image(bitmap->scanline_u8(0), bitmap->width(), bitmap->height(), bitmap->pitch(), format);
+         painter.drawImage(QPoint(0, 0), q_image, QRect(0, 0, bitmap_size.width(), bitmap_size.height()));
+ 
+         auto background_color = page_background_color();
+         auto fallback_color = QColor(background_color.red(), background_color.green(), background_color.blue());
+-        if (bitmap_size.width() < m_viewport_size.width()) {
++        if (!m_transparent_background && bitmap_size.width() < m_viewport_size.width()) {
+             painter.fillRect(bitmap_size.width(), 0, m_viewport_size.width() - bitmap_size.width(), bitmap->height(), fallback_color);
+         }
+-        if (bitmap_size.height() < m_viewport_size.height()) {
++        if (!m_transparent_background && bitmap_size.height() < m_viewport_size.height()) {
+             painter.fillRect(0, bitmap_size.height(), m_viewport_size.width(), m_viewport_size.height() - bitmap_size.height(), fallback_color);
+         }
+ 
+@@ -879,7 +882,8 @@ void WebContentView::paintEvent(QPaintEvent*)
+     }
+ 
+     auto background_color = page_background_color();
+-    painter.fillRect(QRect(0, 0, m_viewport_size.width(), m_viewport_size.height()), QColor(background_color.red(), background_color.green(), background_color.blue()));
++    if (!m_transparent_background)
++        painter.fillRect(QRect(0, 0, m_viewport_size.width(), m_viewport_size.height()), QColor(background_color.red(), background_color.green(), background_color.blue()));
+ }
+ #endif
+ 
+@@ -1133,6 +1137,12 @@ void WebContentView::set_viewport_rect(Gfx::IntRect rect)
+     handle_resize();
+ }
+ 
++void WebContentView::set_transparent_background(bool transparent)
++{
++    ViewImplementation::set_transparent_background(transparent);
++    schedule_repaint();
++}
++
+ // A view in a tab that isn't the current one gets its geometry, but Qt holds the resize event back until the tab is
+ // shown — so the page's first layout would run against whatever the viewport was before, and whatever a script
+ // computes from that sticks even after the tab is selected and laid out for real. This pushes the viewport for the
+diff --git a/UI/Qt/WebContentView.h b/UI/Qt/WebContentView.h
+index 58ecff6d4f..201e842c1e 100644
+--- a/UI/Qt/WebContentView.h
++++ b/UI/Qt/WebContentView.h
+@@ -111,6 +111,8 @@ public:
+     virtual bool event(QEvent*) override;
+ 
+     void set_viewport_rect(Gfx::IntRect);
++    // Allows a host scene to compose this view above another surface.
++    void set_transparent_background(bool);
+     void push_viewport_size();
+     void set_device_pixel_ratio(double);
+     void set_zoom_level(double);

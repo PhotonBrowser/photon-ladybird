@@ -53,6 +53,7 @@ pub fn run(repository: &Path, fetch_only: bool, record: bool, no_fetch: bool) ->
 
     let (target_ref, target_sha) = resolve_target(repository)?;
     ui::kv("Upstream", format!("{} ({target_ref})", ui::sha(&target_sha)));
+    check_series_on_target(repository, &target_sha)?;
 
     if is_ancestor(repository, &target_sha, "HEAD")? {
         ui::success(format!("Already in sync with {target_ref}."));
@@ -103,6 +104,16 @@ fn record_revision(repository: &Path, recorded: &str, target_sha: &str) -> Resul
         return Ok(0);
     }
 
+    let path = repository.join(UPSTREAM_TOML);
+    let source = fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+    let updated = with_updated_revision(&source, target_sha)?;
+    fs::write(&path, updated).with_context(|| format!("failed to update {}", path.display()))?;
+
+    ui::ok("Recorded base", format!("{} in {UPSTREAM_TOML}", ui::sha(target_sha)));
+    Ok(0)
+}
+
+fn check_series_on_target(repository: &Path, target_sha: &str) -> Result<()> {
     let series = patches::series(repository)?;
     let temporary = std::env::temp_dir().join(format!("photon-sync-{}", std::process::id()));
     if temporary.exists() {
@@ -111,15 +122,7 @@ fn record_revision(repository: &Path, recorded: &str, target_sha: &str) -> Resul
     fs::create_dir(&temporary)?;
     let checked = patches::check_in(repository, &temporary, target_sha, &series);
     fs::remove_dir_all(&temporary).context("failed to remove temporary patch checkout")?;
-    checked?;
-
-    let path = repository.join(UPSTREAM_TOML);
-    let source = fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
-    let updated = with_updated_revision(&source, target_sha)?;
-    fs::write(&path, updated).with_context(|| format!("failed to update {}", path.display()))?;
-
-    ui::ok("Recorded base", format!("{} in {UPSTREAM_TOML}", ui::sha(target_sha)));
-    Ok(0)
+    checked.context("Photon patch series does not apply to the fetched upstream target; resolve and update the patches before syncing")
 }
 
 fn with_updated_revision(source: &str, revision: &str) -> Result<String> {

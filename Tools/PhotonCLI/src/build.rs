@@ -12,6 +12,7 @@ use crate::process::{run_inherited, run_logged};
 use crate::ui;
 
 pub fn build(repository: &Path, preset: &str, verbose: bool, target: Option<&str>) -> Result<i32> {
+    crate::patches::ensure_materialized(repository)?;
     let mut command = ladybird_command(repository);
     command.args(["build", "--preset", preset]);
     if let Some(target) = target {
@@ -29,6 +30,7 @@ pub fn run(
     ui: Option<&str>,
     application_args: &[OsString],
 ) -> Result<i32> {
+    crate::patches::ensure_materialized(repository)?;
     if !no_build {
         let code = build(repository, preset, verbose, Some("Photon"))?;
         if code != 0 {

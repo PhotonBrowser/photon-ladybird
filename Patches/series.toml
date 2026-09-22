@@ -11,3 +11,9 @@ id = "0002"
 file = "ladybird/0002-transparent-webui-composition.patch"
 description = "Allow the Web UI chrome to compose transparently above page content"
 area = "Rendering"
+
+[[patches]]
+id = "0003"
+file = "ladybird/0003-webcontent-transparent-view.patch"
+description = "Carry transparent view composition through WebContent IPC and Qt"
+area = "Rendering integration"

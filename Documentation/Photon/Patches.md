@@ -9,7 +9,9 @@ The ordered manifest is `Patches/series.toml`; patch files live in `Patches/lady
 ./photon patches check
 ```
 
-`status` reports whether each patch appears in the working tree. `check` exports the revision from `Meta/Photon/upstream.toml` into a temporary directory and applies the complete series there with `git apply --check`. It never changes the working tree.
+`status` distinguishes applied patches from unapplied or divergent patches, then checks for direct Ladybird edits. When the series is applied, it compares every patch-owned file byte-for-byte with a temporary export of the recorded upstream revision plus the complete series. `check` always verifies that the ordered series applies to that pristine revision and, when materialized, checks that the working files exactly match the result. It also fails on unrepresented modified or untracked Ladybird paths.
+
+`./photon build` and `./photon run` materialize the series before invoking Ladybird's build. They apply patches only when every patch is unapplied and the full series passes `git apply --check`. A partially applied or divergent series stops with an error; the tooling never resets or overwrites files. Upstream sync requires a clean worktree and checks the complete patch series against the fetched target before merging. A patch conflict stops before the merge; merge conflicts also stop without aborting or discarding the merge.
 
 When an upstream change is unavoidable:
 
@@ -19,4 +21,4 @@ When an upstream change is unavoidable:
 4. Add its metadata to `series.toml`.
 5. Run `./photon patches check` and document the reason in the change review.
 
-The series contains the build integration patch and the transparent-composition patch. The latter is intentionally narrow: it adds a per-view transparent canvas flag so Photon’s privileged chrome can render above page content without changing the default canvas behavior of ordinary webpages.
+The series contains the build integration patch, generic transparent canvas/view behavior, and the WebContent IPC and Qt forwarding needed to use transparent composition. Photon-owned browser composition and policy remain in `Photon/`.
