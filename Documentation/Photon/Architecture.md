@@ -54,3 +54,16 @@ The two native surfaces establish a real compositing boundary: QML `z` ordering 
 Moving Ladybird rendering to a Qt Quick-native surface could remove this boundary in the future, but it is a separate integration project and is not part of the current architecture.
 
 One view and one browser state are created today. A future tab model should associate one state and browser-view instance with each tab, while tabs, workspaces, preferences, and session state belong in Rust. Native dialogs and rendering/input plumbing remain in the C++ adapter. Presentation and animation remain in QML.
+
+## Web UI experiment
+
+The QML frontend is now a fallback/reference path. `./photon run --ui web` creates a `WindowScene` containing two independent Ladybird web contexts:
+
+```text
+Photon window
+└── WindowScene
+    ├── ChromeSurface  bundled Photon HTML/CSS/TypeScript
+    └── PageSurface    ordinary website
+```
+
+The chrome surface is full-window and transparent outside its capture regions, so its HTML/CSS popover can overlap the page while `WindowScene` forwards pointer and wheel events elsewhere to the page. The DOMs are separate. Rust still owns product state, C++ only coordinates native views, and Ladybird remains authoritative for navigation and rendering. Details and current limitations are in [WebUI.md](WebUI.md).

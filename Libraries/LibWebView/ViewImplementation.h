@@ -191,6 +191,7 @@ public:
     void set_preferred_color_scheme(Web::CSS::PreferredColorScheme);
     void set_preferred_contrast(Web::CSS::PreferredContrast);
     void set_preferred_motion(Web::CSS::PreferredMotion);
+    void set_transparent_background(bool);
     // A page created to host documents of the tab in another process takes the preferences the view's page has.
     void send_preferences_to_page(Badge<WebContentClient>, WebContentPage&);
 
@@ -749,6 +750,7 @@ protected:
     Web::DevicePixelSize m_backup_bitmap_size;
     Gfx::Color m_page_background_color { 255, 255, 255 };
     Gfx::Color m_system_canvas_background_color { 255, 255, 255 };
+    bool m_transparent_background { false };
     Web::CSS::PreferredColorScheme m_preferred_color_scheme { Web::CSS::PreferredColorScheme::Auto };
     Web::CSS::PreferredContrast m_preferred_contrast { Web::CSS::PreferredContrast::Auto };
     Web::CSS::PreferredMotion m_preferred_motion { Web::CSS::PreferredMotion::Auto };

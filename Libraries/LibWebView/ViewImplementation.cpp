@@ -1157,6 +1157,7 @@ void ViewImplementation::send_preferences_to_page(Badge<WebContentClient>, WebCo
     page.async_set_preferred_color_scheme(m_preferred_color_scheme);
     page.async_set_preferred_contrast(m_preferred_contrast);
     page.async_set_preferred_motion(m_preferred_motion);
+    page.async_set_transparent_background(m_transparent_background);
     page.async_set_preferred_languages(Application::settings().languages());
     page.async_set_zoom_level(m_zoom_level);
     if (m_user_style_sheet.has_value())
@@ -2226,6 +2227,18 @@ void ViewImplementation::set_page_background_color(Gfx::Color color)
     m_page_background_color = color;
     if (on_page_background_color_change)
         on_page_background_color_change(m_page_background_color);
+}
+
+void ViewImplementation::set_transparent_background(bool transparent)
+{
+    if (m_transparent_background == transparent)
+        return;
+
+    m_transparent_background = transparent;
+    set_page_background_color(transparent ? Gfx::Color::Transparent : preferred_canvas_background_color());
+    m_top_level_traversable.for_each_hosting_page([&](WebContentPage& page) {
+        page.async_set_transparent_background(transparent);
+    });
 }
 
 Gfx::Color ViewImplementation::preferred_canvas_background_color() const

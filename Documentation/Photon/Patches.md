@@ -19,4 +19,4 @@ When an upstream change is unavoidable:
 4. Add its metadata to `series.toml`.
 5. Run `./photon patches check` and document the reason in the change review.
 
-The initial series contains one build-only patch: it registers the Photon target and declares Qt Quick for platforms where Ladybird obtains Qt through vcpkg. No engine source is patched.
+The series contains the build integration patch and the transparent-composition patch. The latter is intentionally narrow: it adds a per-view transparent canvas flag so Photon’s privileged chrome can render above page content without changing the default canvas behavior of ordinary webpages.

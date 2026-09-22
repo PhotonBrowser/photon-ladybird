@@ -14,8 +14,10 @@ import_rust_crate(MANIFEST_PATH Rust/Cargo.toml CRATE_NAME photon_core)
 qt_add_executable(photon
     App/main.cpp
     Bridge/BrowserView.cpp
+    Bridge/ChromeSurface.cpp
     Bridge/PhotonApplication.cpp
     Bridge/PhotonWindow.cpp
+    Bridge/WindowScene.cpp
     ${LADYBIRD_SOURCE_DIR}/UI/Qt/EventLoopImplementationQt.cpp
     ${LADYBIRD_SOURCE_DIR}/UI/Qt/EventLoopImplementationQtEventTarget.cpp
     ${LADYBIRD_SOURCE_DIR}/UI/Qt/InputMethodUtils.cpp
@@ -33,6 +35,9 @@ qt_add_resources(photon photon_qml
         UI/components/BrowserSurface.qml
         UI/components/NavigationBar.qml
         UI/components/NavigationButton.qml
+        WebUI/index.html
+        WebUI/dist/bundle.js
+        WebUI/dist/styles.css
 )
 
 target_include_directories(photon PRIVATE

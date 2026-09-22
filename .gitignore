@@ -66,3 +66,4 @@ Meta/CMake/vcpkg/user-variables.cmake
 .DS_Store
 
 __pycache__
+Photon/WebUI/node_modules/

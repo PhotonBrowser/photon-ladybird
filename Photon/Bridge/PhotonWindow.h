@@ -17,6 +17,7 @@ class QCloseEvent;
 namespace Photon {
 
 class BrowserView;
+class WindowScene;
 
 class Window final : public QWidget {
     Q_OBJECT
@@ -25,7 +26,7 @@ public:
     explicit Window(QWidget* parent = nullptr);
     virtual ~Window() override;
 
-    bool initialize();
+    bool initialize(bool web_ui = false);
     BrowserView& browser() const { return *m_browser; }
 
 protected:
@@ -36,6 +37,7 @@ private:
     void update_web_surface_geometry();
 
     std::unique_ptr<BrowserView> m_browser;
+    WindowScene* m_scene { nullptr };
     QQuickWidget* m_quick_view { nullptr };
     QQuickItem* m_surface_item { nullptr };
 };

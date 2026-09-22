@@ -1,0 +1,12 @@
+{
+  "name": "photon-web-ui",
+  "private": true,
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --format=iife --minify --outfile=dist/bundle.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0"
+  }
+}

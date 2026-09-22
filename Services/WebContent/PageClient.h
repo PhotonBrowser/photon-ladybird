@@ -87,6 +87,7 @@ public:
     void set_preferred_color_scheme(Web::CSS::PreferredColorScheme);
     void set_preferred_contrast(Web::CSS::PreferredContrast);
     void set_preferred_motion(Web::CSS::PreferredMotion);
+    void set_transparent_background(bool);
     virtual void set_has_focus(bool) override;
     void set_window_handle(Utf16String);
     void run_webdriver_user_prompt_handling(u64 request_id);
@@ -207,6 +208,7 @@ private:
     virtual Web::CSS::PreferredColorScheme preferred_color_scheme() const override { return m_preferred_color_scheme; }
     virtual Web::CSS::PreferredContrast preferred_contrast() const override { return m_preferred_contrast; }
     virtual Web::CSS::PreferredMotion preferred_motion() const override { return m_preferred_motion; }
+    virtual bool should_use_transparent_canvas() const override { return m_use_transparent_background; }
     virtual void request_frame() override;
     virtual void rendering_opportunity(i64 frame_time_nanoseconds, double frame_interval_milliseconds) override;
     virtual void will_begin_rendering_update() override;
@@ -374,6 +376,7 @@ private:
     Web::CSS::PreferredColorScheme m_preferred_color_scheme { Web::CSS::PreferredColorScheme::Auto };
     Web::CSS::PreferredContrast m_preferred_contrast { Web::CSS::PreferredContrast::NoPreference };
     Web::CSS::PreferredMotion m_preferred_motion { Web::CSS::PreferredMotion::NoPreference };
+    bool m_use_transparent_background { false };
 
     Core::AnonymousBuffer m_document_cookie_version_buffer;
 

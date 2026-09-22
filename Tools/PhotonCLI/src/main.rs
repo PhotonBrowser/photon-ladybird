@@ -129,6 +129,9 @@ struct BuildArgs {
 
 #[derive(Debug, Args)]
 struct RunArgs {
+    /// Select the temporary QML fallback or the HTML/CSS/TypeScript frontend.
+    #[arg(long, value_parser = ["qml", "web"])]
+    ui: Option<String>,
     /// Launch the existing executable without building it first
     #[arg(long)]
     no_build: bool,
@@ -170,6 +173,7 @@ fn run() -> Result<i32> {
             "Release",
             args.no_build,
             args.verbose,
+            args.ui.as_deref(),
             &args.application_args,
         ),
         Command::Clean => build::clean(&repository, "Release"),

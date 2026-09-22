@@ -863,15 +863,18 @@ void WebContentView::paintEvent(QPaintEvent*)
     }
 
     if (bitmap) {
-        QImage q_image(bitmap->scanline_u8(0), bitmap->width(), bitmap->height(), bitmap->pitch(), QImage::Format_RGB32);
+        auto format = bitmap->format() == Gfx::BitmapFormat::BGRA8888
+            ? QImage::Format_ARGB32_Premultiplied
+            : QImage::Format_RGB32;
+        QImage q_image(bitmap->scanline_u8(0), bitmap->width(), bitmap->height(), bitmap->pitch(), format);
         painter.drawImage(QPoint(0, 0), q_image, QRect(0, 0, bitmap_size.width(), bitmap_size.height()));
 
         auto background_color = page_background_color();
         auto fallback_color = QColor(background_color.red(), background_color.green(), background_color.blue());
-        if (bitmap_size.width() < m_viewport_size.width()) {
+        if (!m_transparent_background && bitmap_size.width() < m_viewport_size.width()) {
             painter.fillRect(bitmap_size.width(), 0, m_viewport_size.width() - bitmap_size.width(), bitmap->height(), fallback_color);
         }
-        if (bitmap_size.height() < m_viewport_size.height()) {
+        if (!m_transparent_background && bitmap_size.height() < m_viewport_size.height()) {
             painter.fillRect(0, bitmap_size.height(), m_viewport_size.width(), m_viewport_size.height() - bitmap_size.height(), fallback_color);
         }
 
@@ -879,7 +882,8 @@ void WebContentView::paintEvent(QPaintEvent*)
     }
 
     auto background_color = page_background_color();
-    painter.fillRect(QRect(0, 0, m_viewport_size.width(), m_viewport_size.height()), QColor(background_color.red(), background_color.green(), background_color.blue()));
+    if (!m_transparent_background)
+        painter.fillRect(QRect(0, 0, m_viewport_size.width(), m_viewport_size.height()), QColor(background_color.red(), background_color.green(), background_color.blue()));
 }
 #endif
 
@@ -1131,6 +1135,12 @@ void WebContentView::set_viewport_rect(Gfx::IntRect rect)
 {
     m_viewport_size = rect.size();
     handle_resize();
+}
+
+void WebContentView::set_transparent_background(bool transparent)
+{
+    ViewImplementation::set_transparent_background(transparent);
+    schedule_repaint();
 }
 
 // A view in a tab that isn't the current one gets its geometry, but Qt holds the resize event back until the tab is

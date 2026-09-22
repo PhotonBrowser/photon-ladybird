@@ -13,6 +13,9 @@
 #include <QGuiApplication>
 #include <QStyleHints>
 
+#include <cstdlib>
+#include <cstring>
+
 namespace Ladybird {
 
 bool is_using_dark_system_theme(QWidget&);
@@ -37,9 +40,15 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
 
     auto application = TRY(Photon::Application::create(arguments));
 
+    auto selected_ui = getenv("PHOTON_UI");
+    bool web_ui = selected_ui && StringView(selected_ui, strlen(selected_ui)) == "web"sv;
+
     Photon::Window window;
-    if (!window.initialize())
+    if (!window.initialize(web_ui)) {
+        if (web_ui)
+            return Error::from_string_literal("Photon failed to load its Web UI");
         return Error::from_string_literal("Photon failed to load its QML interface");
+    }
 
     application->set_active_view(window.browser().widget());
     window.show();

@@ -26,6 +26,7 @@ pub fn run(
     preset: &str,
     no_build: bool,
     verbose: bool,
+    ui: Option<&str>,
     application_args: &[OsString],
 ) -> Result<i32> {
     if !no_build {
@@ -41,6 +42,9 @@ pub fn run(
 
     let mut command = ladybird_command(repository);
     command.args(["run", "--preset", preset, "--no-build", "Photon"]);
+    if let Some(ui) = ui {
+        command.env("PHOTON_UI", ui);
+    }
     command.args(application_args);
     run_inherited(&mut command)
 }

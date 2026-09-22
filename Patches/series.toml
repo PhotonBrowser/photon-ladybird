@@ -5,3 +5,9 @@ id = "0001"
 file = "ladybird/0001-integrate-photon-build.patch"
 description = "Register the Photon target and Qt Quick dependency"
 area = "Build"
+
+[[patches]]
+id = "0002"
+file = "ladybird/0002-transparent-webui-composition.patch"
+description = "Allow the Web UI chrome to compose transparently above page content"
+area = "Rendering"

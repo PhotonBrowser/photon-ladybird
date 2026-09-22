@@ -5,8 +5,10 @@
  */
 
 #include <Photon/Bridge/BrowserView.h>
+#include <Photon/Bridge/ChromeSurface.h>
 #include <Photon/Bridge/PhotonApplication.h>
 #include <Photon/Bridge/PhotonWindow.h>
+#include <Photon/Bridge/WindowScene.h>
 
 #include <UI/Qt/WebContentView.h>
 
@@ -22,7 +24,6 @@ namespace Photon {
 Window::Window(QWidget* parent)
     : QWidget(parent)
     , m_browser(std::make_unique<BrowserView>(*this))
-    , m_quick_view(new QQuickWidget(this))
 {
     setWindowTitle(QStringLiteral("Photon"));
     resize(1100, 760);
@@ -35,8 +36,29 @@ Window::Window(QWidget* parent)
 
 Window::~Window() = default;
 
-bool Window::initialize()
+bool Window::initialize(bool web_ui)
 {
+    if (web_ui) {
+        m_scene = new WindowScene(*m_browser, *this);
+        m_scene->chrome().on_command = [this](QString const& command, QString const& value) {
+            if (command == QStringLiteral("navigate"))
+                m_browser->navigate(value);
+            else if (command == QStringLiteral("back"))
+                m_browser->go_back();
+            else if (command == QStringLiteral("forward"))
+                m_browser->go_forward();
+            else if (command == QStringLiteral("reload"))
+                m_browser->reload();
+        };
+        m_scene->load_chrome();
+        connect(m_browser.get(), &BrowserView::title_changed, this, [this] {
+            auto title = m_browser->title();
+            setWindowTitle(title.isEmpty() ? QStringLiteral("Photon") : QStringLiteral("%1 — Photon").arg(title));
+        });
+        return true;
+    }
+
+    m_quick_view = new QQuickWidget(this);
     m_quick_view->setResizeMode(QQuickWidget::SizeRootObjectToView);
     m_quick_view->setInitialProperties({ { QStringLiteral("browserState"), QVariant::fromValue(static_cast<QObject*>(m_browser.get())) } });
     m_quick_view->setSource(QUrl(QStringLiteral("qrc:/Photon/UI/Main.qml")));
@@ -63,6 +85,10 @@ bool Window::initialize()
 void Window::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
+    if (m_scene) {
+        m_scene->setGeometry(rect());
+        return;
+    }
     m_quick_view->setGeometry(rect());
     update_web_surface_geometry();
 }
@@ -75,6 +101,8 @@ void Window::closeEvent(QCloseEvent* event)
 
     auto& application = static_cast<Application&>(WebView::Application::the());
     application.clear_active_view();
+    delete m_scene;
+    m_scene = nullptr;
     m_browser.reset();
 }
 
