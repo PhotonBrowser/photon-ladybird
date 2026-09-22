@@ -5,6 +5,7 @@
  */
 
 #include <LibMain/Main.h>
+#include <AK/Debug.h>
 #include <Photon/Bridge/BrowserView.h>
 #include <Photon/Bridge/PhotonApplication.h>
 #include <Photon/Bridge/PhotonWindow.h>
@@ -41,7 +42,10 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
     auto application = TRY(Photon::Application::create(arguments));
 
     auto selected_ui = getenv("PHOTON_UI");
-    bool web_ui = selected_ui && StringView(selected_ui, strlen(selected_ui)) == "web"sv;
+    bool qml_ui = selected_ui && StringView(selected_ui, strlen(selected_ui)) == "qml"sv;
+    bool web_ui = !qml_ui;
+    if (qml_ui)
+        warnln("Photon: the QML UI is deprecated and will be removed after the React Web UI migration");
 
     Photon::Window window;
     if (!window.initialize(web_ui)) {

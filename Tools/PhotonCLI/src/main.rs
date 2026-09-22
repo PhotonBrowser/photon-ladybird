@@ -129,7 +129,7 @@ struct BuildArgs {
 
 #[derive(Debug, Args)]
 struct RunArgs {
-    /// Select the temporary QML fallback or the HTML/CSS/TypeScript frontend.
+    /// Select the React/TypeScript frontend (default) or the deprecated QML fallback.
     #[arg(long, value_parser = ["qml", "web"])]
     ui: Option<String>,
     /// Launch the existing executable without building it first

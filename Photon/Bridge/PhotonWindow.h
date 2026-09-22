@@ -26,7 +26,7 @@ public:
     explicit Window(QWidget* parent = nullptr);
     virtual ~Window() override;
 
-    bool initialize(bool web_ui = false);
+    bool initialize(bool web_ui = true);
     BrowserView& browser() const { return *m_browser; }
 
 protected:

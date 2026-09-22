@@ -1,24 +1,25 @@
-# Photon Web UI prototype
+# Photon React Web UI
 
-The Web UI is an explicit alternative to the frozen QML frontend:
+The React/TypeScript Web UI is Photon’s default frontend. QML remains available only as a deprecated compatibility path while the migration is completed:
 
 ```text
-./photon run --ui web
-./photon run --ui qml
+./photon run                 # React Web UI (default)
+./photon run --ui web       # explicit React Web UI
+./photon run --ui qml       # deprecated QML fallback
 ```
 
-TypeScript is bundled at build time with esbuild and loaded as static HTML, CSS, and JavaScript at runtime. Photon does not require Node to launch. React is deferred until a compatibility probe justifies it.
+React and TypeScript are bundled at build time with esbuild and loaded as static HTML, CSS, and JavaScript at runtime. Photon does not require Node to launch. The runtime surface remains an ordinary Ladybird `WebContentView`; React is only a bundle-time implementation detail of the privileged chrome document.
 
 ## Composition
 
 ```text
 Photon window
 └── WindowScene
-    ├── ChromeSurface   bundled Photon HTML/CSS/TypeScript
+    ├── ChromeSurface   bundled Photon React/TypeScript
     └── PageSurface     ordinary URL / normal WebContent context
 ```
 
-The two independent Ladybird `WebContentView` instances use Ladybird's existing per-view backing-store and presentation path. `ChromeSurface` is full-window and painted above `PageSurface`; its transparent HTML background lets the page remain visible. The popover is ordinary HTML/CSS with opacity and transform transitions. It is not a QML popup and does not share the page DOM.
+The two independent Ladybird `WebContentView` instances use Ladybird's existing per-view backing-store and presentation path. `ChromeSurface` is full-window and painted above `PageSurface`; its transparent HTML background lets the page remain visible. The popover is a React component rendered as ordinary HTML/CSS with opacity and transform transitions. It is not a QML popup and does not share the page DOM.
 
 The checked-out compositor does not expose a generic multi-surface native scene, so this prototype keeps the scene coordinator in Photon and makes no Ladybird engine/compositor changes. A later generic surface API should replace this coordinator without adding Photon policy to Ladybird.
 

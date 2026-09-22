@@ -3,9 +3,11 @@
     "strict": true,
     "target": "ES2020",
     "module": "ES2020",
+    "moduleResolution": "Bundler",
     "lib": ["DOM", "ES2020"],
+    "jsx": "react-jsx",
     "types": [],
     "noEmit": true
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
 }
