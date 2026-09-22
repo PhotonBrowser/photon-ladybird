@@ -4,13 +4,24 @@ import App from "./App";
 import "./styles.css";
 import type { BrowserState, PhotonApi } from "./types";
 
-const initialState: BrowserState = window.__photonInitialState ?? {
-    url: "https://example.com",
-    title: "Photon",
-    loading: false,
-    canGoBack: false,
-    canGoForward: false,
+const initialStateFromDevServer = (): BrowserState | undefined => {
+    const value = new URLSearchParams(window.location.search).get("photonInitialState");
+    if (!value) return undefined;
+    try {
+        return JSON.parse(value) as BrowserState;
+    } catch {
+        return undefined;
+    }
 };
+
+const initialState: BrowserState = window.__photonInitialState ??
+    initialStateFromDevServer() ?? {
+        url: "https://example.com",
+        title: "Photon",
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+    };
 
 const command = (name: string, value?: string): void => {
     const query = value === undefined ? "" : `?value=${encodeURIComponent(value)}`;

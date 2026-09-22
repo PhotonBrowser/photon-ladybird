@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::mpsc;
@@ -11,6 +11,7 @@ use anyhow::{Context, Result, anyhow};
 
 const SAVED_TAIL_LINES: usize = 40;
 static CHILD_PROCESS_GROUP: AtomicI32 = AtomicI32::new(0);
+static BACKGROUND_PROCESS_GROUP: AtomicI32 = AtomicI32::new(0);
 static CTRL_C_HANDLER: OnceLock<Result<(), String>> = OnceLock::new();
 
 pub struct ProcessOutcome {
@@ -97,6 +98,38 @@ pub fn run_inherited(command: &mut Command) -> Result<i32> {
     Ok(status_code(status))
 }
 
+pub fn start_background(command: &mut Command) -> Result<Child> {
+    install_ctrl_c_handler()?;
+    configure_process_group(command);
+    let child = command.spawn().with_context(|| command_description(command))?;
+    if let Ok(process_group) = i32::try_from(child.id()) {
+        BACKGROUND_PROCESS_GROUP.store(process_group, Ordering::SeqCst);
+    }
+    Ok(child)
+}
+
+pub fn stop_background(child: &mut Child) -> Result<()> {
+    if child.try_wait()?.is_some() {
+        BACKGROUND_PROCESS_GROUP.store(0, Ordering::SeqCst);
+        return Ok(());
+    }
+
+    interrupt_background(child);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while std::time::Instant::now() < deadline {
+        if child.try_wait()?.is_some() {
+            BACKGROUND_PROCESS_GROUP.store(0, Ordering::SeqCst);
+            return Ok(());
+        }
+        thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    terminate_background(child);
+    let _ = child.wait();
+    BACKGROUND_PROCESS_GROUP.store(0, Ordering::SeqCst);
+    Ok(())
+}
+
 fn spawn_reader(reader: impl Read + Send + 'static, stream: Stream, sender: mpsc::Sender<Event>) {
     thread::spawn(move || {
         let mut reader = BufReader::new(reader);
@@ -148,10 +181,40 @@ fn install_ctrl_c_handler() -> Result<()> {
             if process_group > 0 {
                 forward_interrupt(process_group);
             }
+            let background_process_group = BACKGROUND_PROCESS_GROUP.load(Ordering::SeqCst);
+            if background_process_group > 0 {
+                forward_interrupt(background_process_group);
+            }
         })
         .map_err(|error| error.to_string())
     });
     result.as_ref().map_err(|error| anyhow!(error.clone())).copied()
+}
+
+#[cfg(unix)]
+fn interrupt_background(child: &Child) {
+    use nix::sys::signal::{Signal, killpg};
+    use nix::unistd::Pid;
+
+    let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGINT);
+}
+
+#[cfg(not(unix))]
+fn interrupt_background(child: &mut Child) {
+    let _ = child.kill();
+}
+
+#[cfg(unix)]
+fn terminate_background(child: &Child) {
+    use nix::sys::signal::{Signal, killpg};
+    use nix::unistd::Pid;
+
+    let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
+}
+
+#[cfg(not(unix))]
+fn terminate_background(child: &mut Child) {
+    let _ = child.kill();
 }
 
 fn set_active_child(child: &std::process::Child) {

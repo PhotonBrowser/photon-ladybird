@@ -7,6 +7,7 @@ From the repository root:
 ./photon build
 ./photon run
 ./photon run --ui web
+./photon run dev # Vite hot reload for the React chrome
 ./photon run --ui qml # deprecated compatibility fallback
 ```
 

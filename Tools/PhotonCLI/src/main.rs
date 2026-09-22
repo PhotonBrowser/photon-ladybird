@@ -168,14 +168,32 @@ fn run() -> Result<i32> {
 
     match cli.command {
         Command::Build(args) => build::build(&repository, preset(args.debug), args.verbose, Some("Photon")),
-        Command::Run(args) => build::run(
-            &repository,
-            "Release",
-            args.no_build,
-            args.verbose,
-            args.ui.as_deref(),
-            &args.application_args,
-        ),
+        Command::Run(args) => {
+            let is_dev = args.application_args.first().is_some_and(|argument| argument == "dev");
+            if is_dev {
+                if args.ui.as_deref() == Some("qml") {
+                    anyhow::bail!("`./photon run dev` requires the React Web UI; remove `--ui qml`");
+                }
+                return build::run_dev(&repository, args.no_build, args.verbose, &args.application_args[1..]);
+            }
+            if args.ui.as_deref() == Some("qml") {
+                eprintln!(
+                    "{} {}\n  QML is deprecated and may be removed in a future release.\n  Use {} for the React Web UI.",
+                    style("⚠").yellow().bold(),
+                    style("Deprecated frontend").yellow().bold(),
+                    style("./photon run --ui web").cyan().bold()
+                );
+            }
+
+            build::run(
+                &repository,
+                "Release",
+                args.no_build,
+                args.verbose,
+                args.ui.as_deref(),
+                &args.application_args,
+            )
+        }
         Command::Clean => build::clean(&repository, "Release"),
         Command::Test(args) => build::test(&repository, "Release", args.pattern.as_deref(), args.verbose),
         Command::Doctor => doctor::run(&repository),

@@ -45,10 +45,6 @@ ChromeSurface::~ChromeSurface()
 
 void ChromeSurface::load(BrowserView const& browser)
 {
-    auto html = resource(QStringLiteral(":/Photon/WebUI/dist/index.html"));
-    if (html.isEmpty())
-        return;
-
     auto initial_state = QJsonDocument(QJsonObject {
                                            { QStringLiteral("url"), browser.url() },
                                            { QStringLiteral("title"), browser.title() },
@@ -57,6 +53,29 @@ void ChromeSurface::load(BrowserView const& browser)
                                            { QStringLiteral("canGoForward"), browser.can_go_forward() },
                                        })
                              .toJson(QJsonDocument::Compact);
+
+    auto dev_server = qgetenv("PHOTON_WEBUI_DEV_SERVER");
+    if (!dev_server.isEmpty()) {
+        QUrl url(QString::fromUtf8(dev_server));
+        if (!url.isValid()
+            || url.scheme() != QStringLiteral("http")
+            || url.host() != QStringLiteral("127.0.0.1")
+            || url.port() != 5173)
+            return;
+        QUrlQuery query(url);
+        query.addQueryItem(QStringLiteral("photonInitialState"), QString::fromUtf8(initial_state));
+        url.setQuery(query);
+        auto parsed_url = ak_url_from_qstring(url.toString());
+        if (!parsed_url.has_value())
+            return;
+        m_view->load(parsed_url.release_value());
+        return;
+    }
+
+    auto html = resource(QStringLiteral(":/Photon/WebUI/dist/index.html"));
+    if (html.isEmpty())
+        return;
+
     auto head_end = html.indexOf("</head>");
     if (head_end < 0)
         return;
