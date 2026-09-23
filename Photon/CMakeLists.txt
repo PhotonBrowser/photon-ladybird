@@ -42,6 +42,7 @@ qt_add_executable(photon
     App/main.cpp
     Bridge/BrowserView.cpp
     Bridge/ChromeSurface.cpp
+    Bridge/PhotonCommandTransport.cpp
     Bridge/PhotonApplication.cpp
     Bridge/PhotonWindow.cpp
     Bridge/WindowScene.cpp

@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <Photon/Bridge/PhotonCommand.h>
+
 #include <QWidget>
 
 #include <memory>
@@ -33,6 +35,7 @@ protected:
     virtual bool eventFilter(QObject*, QEvent*) override;
 
 private:
+    void dispatch_command(PhotonCommand const&);
     void install_web_shortcuts();
     std::unique_ptr<BrowserView> m_browser;
     WindowScene* m_scene { nullptr };

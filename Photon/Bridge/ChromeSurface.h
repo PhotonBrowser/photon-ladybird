@@ -10,6 +10,9 @@
 
 #include <LibURL/URL.h>
 
+#include <Photon/Bridge/PhotonCommand.h>
+#include <Photon/Bridge/PhotonCommandTransport.h>
+
 #include <QObject>
 #include <QUrl>
 
@@ -36,14 +39,14 @@ public:
     void update_state(BrowserView const& browser);
     void focus_address_bar();
 
-    Function<void(QString const&, QString const&)> on_command;
+    Function<void(PhotonCommand const&)> on_command;
 
 private:
-    bool is_allowed_command(QUrl const&, QString&, QString&) const;
     bool handle_navigation_request(URL::URL const&);
 
     Ladybird::WebContentView* m_view { nullptr };
     QUrl m_dev_server_origin;
+    PhotonCommandTransport m_command_transport;
     bool m_trusted_document_loaded { false };
 };
 

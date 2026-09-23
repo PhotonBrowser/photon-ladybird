@@ -21,6 +21,9 @@
 #include <QTimer>
 #include <QWindow>
 
+#include <type_traits>
+#include <variant>
+
 namespace Photon {
 
 Window::Window(QWidget* parent)
@@ -99,48 +102,7 @@ bool Window::initialize()
     setWindowFlag(Qt::FramelessWindowHint);
 #endif
     m_scene = new WindowScene(*m_browser, *this);
-    m_scene->chrome().on_command = [this](QString const& command, QString const& value) {
-        if (command != QStringLiteral("capture"))
-            m_scene->clear_open_overlays();
-        if (command == QStringLiteral("navigate"))
-            m_browser->navigate(value);
-        else if (command == QStringLiteral("back"))
-            m_browser->go_back();
-        else if (command == QStringLiteral("forward"))
-            m_browser->go_forward();
-        else if (command == QStringLiteral("reload"))
-            m_browser->reload();
-        else if (command == QStringLiteral("new-tab"))
-            m_browser->create_tab();
-        else if (command == QStringLiteral("open-settings"))
-            m_browser->open_settings();
-        else if (command == QStringLiteral("select-tab"))
-            m_browser->select_tab(value.mid(4).toULongLong());
-        else if (command == QStringLiteral("close-tab"))
-            m_browser->close_tab(value.mid(4).toULongLong());
-        else if (command == QStringLiteral("reorder-tabs")) {
-            QList<uint64_t> tab_ids;
-            for (auto const& tab_id : value.split(QLatin1Char(',')))
-                tab_ids.append(tab_id.mid(4).toULongLong());
-            m_browser->reorder_tabs(tab_ids);
-        } else if (command == QStringLiteral("set-theme"))
-            m_browser->set_theme_mode(value);
-        else if (command == QStringLiteral("set-dim-overlays"))
-            m_browser->set_dim_overlays(value == QStringLiteral("true"));
-        else if (command == QStringLiteral("window-minimize"))
-            showMinimized();
-        else if (command == QStringLiteral("window-toggle-maximize"))
-            isMaximized() ? showNormal() : showMaximized();
-        else if (command == QStringLiteral("window-close"))
-            QTimer::singleShot(0, this, [this] { close(); });
-        else if (command == QStringLiteral("window-drag")) {
-            if (windowHandle())
-                windowHandle()->startSystemMove();
-        }
-        else if (command == QStringLiteral("capture")) {
-            m_scene->set_overlay_open(value.endsWith(QStringLiteral(":open")));
-        }
-    };
+    m_scene->chrome().on_command = [this](PhotonCommand const& command) { dispatch_command(command); };
     m_scene->load_chrome();
     install_web_shortcuts();
     connect(m_browser.get(), &BrowserView::title_changed, this, [this] {
@@ -148,6 +110,67 @@ bool Window::initialize()
         setWindowTitle(title.isEmpty() ? QStringLiteral("Photon") : QStringLiteral("%1 — Photon").arg(title));
     });
     return true;
+}
+
+void Window::dispatch_command(PhotonCommand const& command)
+{
+    if (!std::holds_alternative<SetOverlayCaptureCommand>(command))
+        m_scene->clear_open_overlays();
+
+    std::visit([this](auto const& typed_command) {
+        using Command = std::decay_t<decltype(typed_command)>;
+        if constexpr (std::is_same_v<Command, NavigateCommand>)
+            m_browser->navigate(typed_command.url);
+        else if constexpr (std::is_same_v<Command, BackCommand>)
+            m_browser->go_back();
+        else if constexpr (std::is_same_v<Command, ForwardCommand>)
+            m_browser->go_forward();
+        else if constexpr (std::is_same_v<Command, ReloadCommand>)
+            m_browser->reload();
+        else if constexpr (std::is_same_v<Command, NewTabCommand>)
+            m_browser->create_tab();
+        else if constexpr (std::is_same_v<Command, OpenSettingsCommand>)
+            m_browser->open_settings();
+        else if constexpr (std::is_same_v<Command, SelectTabCommand>)
+            m_browser->select_tab(typed_command.tab_id);
+        else if constexpr (std::is_same_v<Command, CloseTabCommand>)
+            m_browser->close_tab(typed_command.tab_id);
+        else if constexpr (std::is_same_v<Command, ReorderTabsCommand>)
+            m_browser->reorder_tabs(typed_command.tab_ids);
+        else if constexpr (std::is_same_v<Command, SetThemeCommand>) {
+            switch (typed_command.mode) {
+            case ThemeMode::System:
+                m_browser->set_theme_mode(QStringLiteral("system"));
+                break;
+            case ThemeMode::Light:
+                m_browser->set_theme_mode(QStringLiteral("light"));
+                break;
+            case ThemeMode::Dark:
+                m_browser->set_theme_mode(QStringLiteral("dark"));
+                break;
+            }
+        } else if constexpr (std::is_same_v<Command, SetDimOverlaysCommand>)
+            m_browser->set_dim_overlays(typed_command.enabled);
+        else if constexpr (std::is_same_v<Command, SetOverlayCaptureCommand>)
+            m_scene->set_overlay_open(typed_command.open);
+        else if constexpr (std::is_same_v<Command, WindowControlCommand>) {
+            switch (typed_command.command) {
+            case WindowCommand::Minimize:
+                showMinimized();
+                break;
+            case WindowCommand::ToggleMaximize:
+                isMaximized() ? showNormal() : showMaximized();
+                break;
+            case WindowCommand::Close:
+                QTimer::singleShot(0, this, [this] { close(); });
+                break;
+            case WindowCommand::StartSystemMove:
+                if (windowHandle())
+                    windowHandle()->startSystemMove();
+                break;
+            }
+        }
+    }, command);
 }
 
 bool Window::eventFilter(QObject* watched, QEvent* event)
