@@ -5,6 +5,7 @@
  */
 
 #include <Photon/Bridge/BrowserView.h>
+#include <Photon/Bridge/PhotonCommand.h>
 
 #include <AK/Base64.h>
 #include <LibGfx/ImageFormats/PNGWriter.h>
@@ -18,7 +19,9 @@
 #include <QWidget>
 
 namespace Ladybird {
+
 bool is_using_dark_system_theme(QWidget&);
+
 }
 
 namespace Photon {
@@ -179,8 +182,11 @@ Ladybird::WebContentView& BrowserView::create_view(uint64_t tab_id)
     view->on_loading_state_change = [this, tab_id](bool loading) {
         update_loading(tab_id, loading);
     };
+    view->on_close = [this, tab_id] {
+        apply_app_effects(dispatch_app_command(m_state, PhotonAppCommandKind_CloseTab, tab_id));
+    };
     view->on_favicon_change = [this, tab_id](Optional<Gfx::Bitmap const&> const& favicon) {
-        auto favicon_url = QString {};
+        auto favicon_url = QString { };
         if (favicon.has_value()) {
             auto png = Gfx::PNGWriter::encode(*favicon);
             if (png.is_error())
@@ -267,7 +273,19 @@ void BrowserView::select_adjacent_tab(bool previous)
 
 void BrowserView::close_tab(uint64_t tab_id)
 {
-    apply_app_effects(dispatch_app_command(m_state, PhotonAppCommandKind_CloseTab, tab_id));
+    auto* view = m_views.value(tab_id);
+    if (!view)
+        return;
+
+    // Keep the final native view alive: the Rust state resets the last tab in place.
+    if (m_views.size() == 1) {
+        apply_app_effects(dispatch_app_command(m_state, PhotonAppCommandKind_CloseTab, tab_id));
+        return;
+    }
+
+    // WebContent calls on_close only after its top-level traversable has completed closing.
+    // That callback removes the Rust tab and its native view.
+    view->request_close();
 }
 
 void BrowserView::reorder_tabs(QList<uint64_t> const& tab_ids)
@@ -275,9 +293,10 @@ void BrowserView::reorder_tabs(QList<uint64_t> const& tab_ids)
     apply_app_effects(dispatch_app_command(m_state, PhotonAppCommandKind_ReorderTabs, 0, &tab_ids));
 }
 
-void BrowserView::set_theme_mode(QString const& mode)
+void BrowserView::set_theme_mode(ThemeMode mode)
 {
-    auto value = mode == QStringLiteral("light") ? 1 : mode == QStringLiteral("dark") ? 2 : 0;
+    auto value = mode == ThemeMode::Light ? 1 : mode == ThemeMode::Dark ? 2
+                                                                        : 0;
     apply_app_effects(dispatch_app_command(m_state, PhotonAppCommandKind_SetTheme, static_cast<uint64_t>(value)));
 }
 
@@ -292,14 +311,22 @@ void BrowserView::apply_app_effects(PhotonAppEffects const& effects)
         return;
     if (effects.created_tab_id != 0)
         create_view(effects.created_tab_id);
-    if (effects.removed_tab_id != 0)
-        delete m_views.take(effects.removed_tab_id);
+    Ladybird::WebContentView* removed_view = nullptr;
+    if (effects.removed_tab_id != 0) {
+        removed_view = m_views.take(effects.removed_tab_id);
+    }
     if (effects.tabs_changed)
         sync_view_visibility();
+    auto active_tab_signal_emitted = effects.active_tab_changed && removed_view;
+    if (active_tab_signal_emitted)
+        emit active_tab_changed();
+    if (removed_view)
+        removed_view->deleteLater();
     if (effects.theme_changed)
         refresh_preferred_color_scheme();
     else if (effects.active_tab_changed) {
-        emit active_tab_changed();
+        if (!active_tab_signal_emitted)
+            emit active_tab_changed();
         emit_active_tab_state_changed();
     } else if (effects.state_changed)
         emit browser_state_changed();

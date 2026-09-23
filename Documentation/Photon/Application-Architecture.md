@@ -1,84 +1,101 @@
 # Photon application architecture
 
-This document defines ownership for Photon features and records the first incremental move toward a Rust-owned application core. Ladybird remains the browser engine; this architecture does not move Qt or Ladybird objects into Rust.
+This document records the ownership audit for Photon-specific behavior and the first incremental migration of tab and preference commands into a Rust application layer. Ladybird remains the web engine, and Qt remains the platform/window integration toolkit.
 
-## Baseline ownership audit
-
-| Area | Current owner | Responsibilities found |
-| --- | --- | --- |
-| UI / presentation | `Photon/WebUI` TypeScript + React | Browser chrome, internal-page presentation, transient focus/edit/popover state, typed `window.photon` API, command transport adapter, snapshot rendering |
-| Application state and policy | `Photon/Rust` | Tab IDs/order/active identity, internal routes, preferences, config persistence, URL-input normalization, navigation command preparation, engine-reported page metadata, snapshot serialization |
-| Command adapter and Ladybird integration | `Photon/Bridge/BrowserView.cpp` | Owns each `WebContentView`, performs loads/history operations, translates Ladybird callbacks into Rust state updates, updates page theme, adapts Rust state transitions to view creation/visibility/destruction |
-| Command dispatch | `Photon/Bridge/PhotonWindow.cpp` | Matches typed `PhotonCommand` variants, routes browser/app operations to `BrowserView`, performs Qt window operations, clears native overlay capture for non-capture commands |
-| Trusted UI transport | `Photon/Bridge/ChromeSurface.cpp`, `PhotonCommandTransport.cpp` | Loads trusted WebUI, carries initial state/events, consumes the temporary navigation transport, validates its shape/arguments, produces typed Photon commands |
-| Window/input integration | `Photon/Bridge/WindowScene.cpp`, `PhotonWindow.cpp` | Composes separate trusted/untrusted WebContent views, forwards input, starts Qt window operations, stores the minimal overlay input-capture bit |
-| Browser engine | Ladybird WebContent / LibWebView | Web standards, actual URL/title/loading/history, page rendering, engine events and view behavior |
-
-### Existing command and state paths
+## Before: ownership and command path
 
 ```text
-React API → typed TypeScript command → temporary navigation transport
-    → ChromeSurface decoder → Window dispatcher
-    → BrowserView → Rust state methods → Ladybird effects
+React / TypeScript
+    │ typed Photon API and TypeScript command union
+    ▼
+PhotonCommandTransport
+    │ temporary photon-command:// adapter
+    ▼
+ChromeSurface decoder and allowlist
+    ▼
+PhotonWindow::dispatch_command
+    ├── BrowserView ── narrow Rust C ABI ── BrowserState
+    │                    └── Ladybird WebContentView operations
+    ├── WindowScene ── Qt input capture
+    └── Qt window controls
 
-Ladybird callbacks → BrowserView → Rust state → snapshot JSON
+Ladybird callbacks → BrowserView → Rust BrowserState → snapshot
     → ChromeSurface photon-state event → React
 ```
 
-The Rust `BrowserState` already makes the core tab and preference decisions. However, `BrowserView` currently reconstructs tab transition effects in C++: it discovers removed tabs by comparing Rust tab-ID lists, determines whether the active tab changed, and decides which Qt signals and view synchronization to perform. Those are application transition decisions; managing `WebContentView` objects and applying the results are integration work.
+| Responsibility | Before owner | Classification |
+| --- | --- | --- |
+| Browser chrome, settings page, overlays, transient editing/focus | React / TypeScript | UI |
+| Tab identity, ordering, active tab, internal routes | Rust `BrowserState`, initiated from C++ methods | Application logic and state |
+| Theme and overlay appearance preferences, config serialization | Rust `BrowserState` and config module | Application state and persistence |
+| Command URL decoding and validation | Photon C++ `ChromeSurface` transport decoder | Transport and security boundary |
+| Native command routing | Photon C++ `Window::dispatch_command` | Integration routing, with duplicated application dispatch decisions |
+| Per-tab `WebContentView` objects, page callbacks, actual navigation/load/history operations | Photon C++ `BrowserView` + Ladybird APIs | Browser-engine integration |
+| Page URL/title/loading/history truth | Ladybird callbacks, represented in Rust snapshots | Engine state |
+| Window controls and native system move | Photon C++ `Window` + Qt | Platform/window integration |
+| Overlay input capture and pointer/wheel forwarding | Photon C++ `WindowScene` + Qt | Native input/composition integration |
+| Initial snapshot and state update delivery | Rust serialization; C++ bootstrap/event dispatch | State transport |
 
-`Window::dispatch_command` is an adapter, not the long-term application state machine. Qt window operations, transparent scene composition, input forwarding, and Ladybird callbacks remain appropriately native. React owns only presentation and transient UI state.
+Rust already owns browser facts and persistence. Before this migration, however, C++ made tab lifecycle decisions around those facts. In particular, `BrowserView::close_tab` took two tab-ID snapshots and diffed them to infer which native view to destroy, while `BrowserView` itself decided which state signals to emit after each mutation.
 
-## Rust application core
-
-`PhotonApp` is the Photon-owned application coordinator. It owns `BrowserState`, including preferences and persisted configuration, and accepts domain commands. It returns a compact `AppEffects` value describing state changes and native page-view lifecycle effects. It has no Qt or Ladybird dependency.
-
-```text
-PhotonApp::dispatch(AppCommand)
-    ├── mutates Rust-owned tab/preferences state
-    └── returns AppEffects
-              ├── create/remove native page view
-              ├── active tab changed
-              ├── snapshot/state changed
-              └── theme changed
-```
-
-The first migration uses Rust dispatch for tab lifecycle and preferences. Navigation normalization and `BrowserCommand` preparation remain in the existing Rust browser model. C++ consumes the resulting commands/effects and performs the corresponding Ladybird or Qt operations. Window controls and overlay capture stay native because they represent platform calls and scene input routing, not persistent browser application state.
-
-The current C ABI remains a narrow same-process boundary. It carries typed command kinds, scalar IDs, an ID slice for reorder, and fixed-layout effect flags/IDs. Rust owns no native pointer. Page-view creation, deletion, loading, history traversal, and theme application remain in C++.
-
-## Future feature placement
+## After: Rust application decisions and native effects
 
 ```text
-Is it React presentation or transient interaction state?
-    → TypeScript / React
+React / TypeScript
+    │ typed Photon API
+    ▼
+PhotonCommandTransport (temporary URL adapter)
+    ▼
+ChromeSurface → typed PhotonCommand → PhotonWindow dispatcher
+    ├── browser navigation ──► BrowserView ──► Rust navigation model
+    │                                      └──► Ladybird WebContentView
+    ├── tab/preferences ─────► BrowserView adapter
+    │                              │ PhotonAppCommand
+    │                              ▼
+    │                         Rust PhotonApp
+    │                              │ PhotonAppEffects
+    │                              ▼
+    │                         BrowserView applies view/signal effects
+    ├── overlay input capture ─► WindowScene / Qt
+    └── native window controls ► Qt window
 
-Is it Photon application state, policy, or a domain transition?
-    → Photon Rust application core
-
-Must it manipulate a Ladybird C++ object or consume an engine callback?
-    → thin Photon C++ adapter
-
-Must it call Qt or a native window-system API?
-    → thin Photon C++ / Qt adapter
-
-Is it a web-platform behavior?
-    → Ladybird in its upstream architecture and language
+Ladybird callbacks → BrowserView → Rust application state/snapshot
+    → ChromeSurface photon-state event → React
 ```
+
+`PhotonApp` now owns decisions for create/open/select/close/reorder tab commands and theme/dimming preference updates. Its typed `AppCommand` accepts domain operations, and `AppEffects` describes state transitions for the adapter, including the tab ID to create or remove and whether active content changed. One C ABI dispatch function carries this operation/effect boundary. C++ performs the corresponding `WebContentView` allocation/destruction, active-view composition, Qt preferred-color-scheme update, and UI state notifications.
+
+The C++ adapter no longer reconstructs tab removal by enumerating Rust state before and after a close. Closing the last tab is represented as replacement of active content under the same tab ID, so the existing native view remains allocated while React receives the new-tab state.
+
+Navigation, URL normalization, and history command preparation remain in the existing Rust `BrowserState` path. Ladybird still performs the page load, reload, and history traversal. Qt window controls, system move, overlay capture, event routing, and WebContent view lifetime remain native integration responsibilities.
 
 ## Migration candidates
 
-Prioritized remaining Photon-owned candidates:
+Priority is based on application ownership and current duplication, while preserving genuine Qt/Ladybird work in C++.
 
-1. **Navigation coordination effects:** Rust already normalizes input and prepares typed navigation commands. Over time, let the application core return a unified `Navigate`/`Reload`/`HistoryTraversal` effect instead of keeping browser command coordination split between `BrowserView` methods and Rust preparation. C++ still performs the Ladybird load/traversal.
-2. **Session model and restore policy:** add tab/session persistence, restore decisions, and lifecycle policy to `PhotonApp`; leave URL loading and page-view construction in `BrowserView`.
-3. **Application-level command routing:** move Photon command policy and state transitions behind Rust app commands. Keep the C++ dispatcher limited to Qt commands and executing typed effects; the trusted transport and Qt window commands are not Rust responsibilities.
-4. **Window state model only if product behavior needs it:** Rust may own requested window state or policy if Photon adds persistence/coordination. Qt remains the source for actual minimized/maximized/native geometry state and executes platform operations.
+1. **Navigation command coordination** — Rust already normalizes input and prepares a typed `BrowserCommand`; moving target-tab selection and returned load intents into `PhotonApp` would make browser command policy consistently Rust-owned. C++ must continue translating those intents to Ladybird `WebContentView` calls.
+2. **Shortcut policy** — `PhotonWindow` currently binds browser shortcuts to actions. The Qt event filter and focus handling belong in C++, but shortcut-to-Photon-command mapping and tab-cycle decisions are application policy candidates for a Rust-owned command mapping if this becomes more complex.
+3. **Browser/page event aggregation** — Engine callbacks must enter through C++, but the Rust state transition and snapshot policy could be grouped into application-level event operations as more state is added. Do not move Ladybird callback registration or view handles into Rust.
+4. **Window state model (only if product state requires it)** — current minimize/maximize/close/move actions directly call Qt and are platform integration. If Photon later needs persisted or cross-platform window policy, model that policy in Rust while leaving actual platform calls in C++.
 
-Do not migrate `WebContentView` ownership, URL loading/history APIs, title/loading/favicon callbacks, view composition, focus routing, pointer/wheel forwarding, native system move, or OS window controls. They directly integrate with Ladybird or Qt.
+Session restoration, multi-window ownership, and richer application configuration are not implemented sufficiently to justify speculative core abstractions now. React interaction state remains UI-owned.
 
-## C ABI assessment
+## Rust/C++ boundary
 
-The present C ABI is appropriate for this in-process application: it has one opaque app-state handle, narrow typed commands, and fixed-layout effects. It avoids Rust dependencies on Qt/Ladybird and has no callback ownership or cross-thread handles. This pass consolidates Photon tab/preferences mutations into one application dispatch operation instead of adding another FFI framework.
+The existing C ABI remains appropriate for the small number of synchronous calls across this boundary. It uses an opaque per-window Rust state allocation, borrowed UTF-8 snapshot/query values, typed browser command results, and now one typed application command/effect record for tab and preference decisions. Tab IDs and values cross the boundary; Rust does not own Qt or Ladybird pointers.
 
-If commands and effects grow substantially, use a versioned command/effect batch or a generated C ABI binding rather than adding one export per UI action. A new FFI technology is not justified by the current surface. Any future transport replacement for `photon-command://` should call the same Photon application command boundary and leave this state/effect contract unchanged.
+Ladybird callbacks still update URL, title, favicon, loading, and navigation capabilities through separate C ABI calls. Those are engine-to-application observations at the integration boundary, rather than React command functions. If this event surface grows, consider one typed page-state update record; the current event payloads are small and do not justify changing the ABI in this pass.
+
+The application command kind is a narrow numeric C representation decoded immediately into a Rust `AppCommand`; it is not a general string command channel. Invalid kinds, preference values, and invalid reorder buffers are rejected. Keep command definitions adjacent in `PhotonCore.h` and Rust FFI code. A generated binding or another interoperability technology is not warranted by this pass; reassess only if ABI drift or data volume becomes a demonstrated maintenance problem.
+
+## Development decision tree
+
+For a new Photon feature:
+
+1. Is it presentation, interaction, or transient UI state? Put it in React/TypeScript.
+2. Is it Photon application behavior, persistent state, command policy, tab/session logic, or feature coordination? Put it in Rust.
+3. Must it manipulate a Ladybird C++ object or receive an engine callback? Keep the smallest adapter in Photon C++.
+4. Must it call Qt or a native platform API? Keep that call in Photon C++.
+5. Is the behavior part of web-platform/engine semantics? Implement it in Ladybird's architecture and keep any Photon-specific engine change in the registered patch series.
+
+Do not put Photon product policy in Ladybird, and do not make C++ the default home for new Photon application logic.

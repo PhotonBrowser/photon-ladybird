@@ -32,8 +32,8 @@ PhotonWindow callback
 | API group | Methods / values | Current destination |
 | --- | --- | --- |
 | `navigation` | `navigate`, `back`, `forward`, `reload` | `BrowserView`; Rust prepares typed `BrowserCommand`; C++ performs the corresponding Ladybird load/history operation |
-| `tabs` | `create`, `openSettings`, `select`, `close`, `reorder` | `BrowserView`; typed Rust C ABI methods mutate tab state; C++ creates/selects/destroys page views |
-| `settings` | `setTheme`, `setDimOverlays` | `BrowserView` and Rust state; theme is also applied to current Ladybird views |
+| `tabs` | `create`, `openSettings`, `select`, `close`, `reorder` | Rust `PhotonApp` decides state transitions and returns effects; `BrowserView` creates/selects/destroys page views |
+| `settings` | `setTheme`, `setDimOverlays` | Rust `PhotonApp` owns preference transitions; `BrowserView` applies theme to current Ladybird views |
 | `ui` | `setCaptureRegion` | `WindowScene` stores only the overlay input-capture bit |
 | `window` | `platform`, `beginDrag`, `minimize`, `toggleMaximize`, `close` | `PhotonWindow` / Qt; `platform` is bootstrap metadata |
 | `browser` | `state`, `onStateChange` | React reads the latest snapshot and subscribes to `photon-state` |
@@ -44,7 +44,7 @@ Before this pass, the URL was generated only in `Photon/WebUI/src/main.tsx` and 
 
 ## Rust and native ownership
 
-Rust owns persistent browser state: tabs, IDs/order, internal routes, preferences, and the page metadata snapshot. Its `BrowserCommand` covers URL navigation and history operations; the C ABI also exposes typed functions for tab and preference operations. C++ owns Ladybird view pointers, translates engine callbacks into Rust state updates, and applies browser commands to `WebContentView`. Qt window operations and the transient overlay input-capture bit are native concerns and currently bypass Rust state.
+Rust owns Photon application state: tabs, IDs/order, internal routes, preferences, and the page metadata snapshot. Its `BrowserCommand` covers URL navigation and history operations. Tab and preference operations now enter through one typed `photon_app_dispatch` call and return `PhotonAppEffects`; Rust decides which tab is created/removed, whether active content changed, and whether preferences changed. C++ owns Ladybird view pointers, applies those effects, translates engine callbacks into Rust state updates, and performs browser commands through `WebContentView`. Qt window operations and the transient overlay input-capture bit are native concerns and currently bypass Rust state.
 
 Ladybird remains authoritative for actual web URL, title, loading, favicon, and history availability. `BrowserView` receives per-view callbacks, updates Rust, and emits Qt signals. The native side returns a serialized Rust snapshot through `ChromeSurface::update_state`, which dispatches a `photon-state` DOM event. Initial state is injected while loading the trusted bundled document. A separate fixed `photon-focus-address` event sends a keyboard-shortcut notification from native code to React.
 
@@ -61,12 +61,12 @@ The inline-data issue was fixed during this pass: the production bootstrap now e
 
 ## Temporary transport and migration boundary
 
-`photon-command://` is only a transport shim: React callers already use domain methods, and `BrowserView` already calls typed Rust APIs. Replacing it should affect the TypeScript command transport and the native adapter at `ChromeSurface`, not React components or Rust's browser state model. A dedicated native JS binding would still need a Photon-owned, trusted-context-scoped way to deliver typed messages into the Qt/native dispatcher and return events; Ladybird currently exposes a top-level navigation interception callback, not that binding.
+`photon-command://` is only a transport shim: React callers already use domain methods, and `BrowserView` calls typed Rust application operations. Replacing it should affect the TypeScript command transport and the native adapter at `ChromeSurface`, not React components or Rust's application command model. A dedicated native JS binding would still need a Photon-owned, trusted-context-scoped way to deliver typed messages into the native dispatcher and return events; Ladybird currently exposes a top-level navigation interception callback, not that binding.
 
 ## Findings by area
 
-- **Architecture:** the public TypeScript API was domain-shaped, but its implementation emitted free-form string names and values. The native callback repeated that untyped shape. Rust already has a typed `BrowserCommand` for navigation and typed C ABI functions for tab/preferences state; window operations correctly belong to Qt.
-- **Performance:** each command currently incurs a WebContent top-level navigation request which is then canceled. This is extra transport work and coupling; there is no profiling evidence here that it causes a user-visible delay. Command parsing and native window operations are small, synchronous GUI work.
+- **Architecture:** the public TypeScript API was domain-shaped, but its implementation emitted free-form string names and values. The native callback repeated that untyped shape. The boundary now has a Rust `PhotonApp` command/effect layer for tab and preference decisions; browser navigation remains a typed Rust command executed by Ladybird, and window operations correctly belong to Qt.
+- **Performance:** each command currently incurs a WebContent top-level navigation request which is then canceled. This is extra transport work and coupling; there is no profiling evidence here that it causes a user-visible delay. Preference changes also serialize and write the small config file synchronously from the command call on the GUI path; this is a real filesystem operation, but no measured user-visible delay has been established. No speculative asynchronous machinery was added.
 - **Security:** ordinary page views have no command callback or injected API. Chrome top-level external navigation is canceled. Production bootstrap script interpolation was a concrete injection risk and is now encoded safely. Development remains trusted only at the pinned loopback origin.
 - **Maintainability:** wire command names and validation were concentrated in `ChromeSurface`, while destination routing lived as string comparisons in `PhotonWindow`. Typed frontend commands, a native decoder, and one typed dispatcher now separate those responsibilities.
 - **Ladybird coupling:** the temporary transport relies on Photon patch 0004's generic top-level navigation callback. A dedicated bridge would need a trusted-view-scoped native-to-JavaScript command hook and a JavaScript-to-native message path. That would require a focused Ladybird API/IPC patch; this pass does not add one.
@@ -85,14 +85,15 @@ PhotonCommandTransport interface
 Navigation transport adapter (temporary photon-command:// encoding)
     ▼
 ChromeSurface → PhotonCommandTransport decoder → PhotonWindow::dispatch_command
-    ├── BrowserView → typed Rust C ABI / BrowserState → Ladybird WebContentView
+    ├── BrowserView → Rust PhotonApp command/effect boundary
+    │                       └── BrowserView applies effects to Ladybird WebContentView
     ├── WindowScene overlay-capture state
     └── Qt window operations
 
-Ladybird callbacks → BrowserView → Rust snapshot → ChromeSurface
+Ladybird callbacks → BrowserView → Rust application state/snapshot → ChromeSurface
     → photon-state event → React subscribers
 ```
 
-The TypeScript transport and C++ decoder are the only layers coupled to the navigation scheme. Replacing them with a dedicated binding leaves the public API and Rust state operations intact. The Qt window-control variants are C++/Qt-owned because Rust does not own a native window handle.
+The TypeScript transport and C++ decoder are the only layers coupled to the navigation scheme. Replacing them with a dedicated binding leaves React callers, `Window::dispatch_command`, Rust application commands, and snapshot events intact. Rust owns Photon tab and preference decisions through `PhotonApp`; `BrowserView` applies returned lifecycle/state effects to native view objects. Qt window-control variants are C++/Qt-owned because Rust does not own a native window handle. See [Application Architecture](Application-Architecture.md) for the detailed responsibility audit and prioritized migration candidates.
 
 The existing snapshot event contains tab URL/title/loading/history capability data, preference state, and tab order. There is no structured window-state event today; `window.platform` is bootstrap metadata, and maximize state is not exposed to React.

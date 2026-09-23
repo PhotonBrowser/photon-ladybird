@@ -140,19 +140,9 @@ void Window::dispatch_command(PhotonCommand const& command)
             m_browser->close_tab(typed_command.tab_id);
         else if constexpr (std::is_same_v<Command, ReorderTabsCommand>)
             m_browser->reorder_tabs(typed_command.tab_ids);
-        else if constexpr (std::is_same_v<Command, SetThemeCommand>) {
-            switch (typed_command.mode) {
-            case ThemeMode::System:
-                m_browser->set_theme_mode(QStringLiteral("system"));
-                break;
-            case ThemeMode::Light:
-                m_browser->set_theme_mode(QStringLiteral("light"));
-                break;
-            case ThemeMode::Dark:
-                m_browser->set_theme_mode(QStringLiteral("dark"));
-                break;
-            }
-        } else if constexpr (std::is_same_v<Command, SetDimOverlaysCommand>)
+        else if constexpr (std::is_same_v<Command, SetThemeCommand>)
+            m_browser->set_theme_mode(typed_command.mode);
+        else if constexpr (std::is_same_v<Command, SetDimOverlaysCommand>)
             m_browser->set_dim_overlays(typed_command.enabled);
         else if constexpr (std::is_same_v<Command, SetOverlayCaptureCommand>)
             m_scene->set_overlay_open(typed_command.open);

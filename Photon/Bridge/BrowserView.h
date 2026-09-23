@@ -6,11 +6,11 @@
 
 #pragma once
 
+#include <LibWeb/CSS/PreferredColorScheme.h>
+#include <QHash>
 #include <QObject>
 #include <QString>
-#include <QHash>
 #include <cstdint>
-#include <LibWeb/CSS/PreferredColorScheme.h>
 
 class QWidget;
 struct PhotonBrowserCommand;
@@ -24,6 +24,8 @@ class WebContentView;
 }
 
 namespace Photon {
+
+enum class ThemeMode;
 
 class BrowserView final : public QObject {
     Q_OBJECT
@@ -60,7 +62,7 @@ public:
     void select_adjacent_tab(bool previous);
     Q_INVOKABLE void close_tab(uint64_t tab_id);
     Q_INVOKABLE void reorder_tabs(QList<uint64_t> const& tab_ids);
-    void set_theme_mode(QString const& mode);
+    void set_theme_mode(ThemeMode mode);
     void set_dim_overlays(bool enabled);
     void load_initial_url();
 

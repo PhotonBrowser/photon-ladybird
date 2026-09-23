@@ -38,6 +38,34 @@ pub struct PhotonAppCommand {
     pub ids_len: usize,
 }
 
+#[repr(u32)]
+enum PhotonAppCommandKind {
+    CreateTab = 1,
+    OpenSettings = 2,
+    SelectTab = 3,
+    CloseTab = 4,
+    ReorderTabs = 5,
+    SetTheme = 6,
+    SetDimOverlays = 7,
+}
+
+impl TryFrom<u32> for PhotonAppCommandKind {
+    type Error = ();
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Self::CreateTab),
+            2 => Ok(Self::OpenSettings),
+            3 => Ok(Self::SelectTab),
+            4 => Ok(Self::CloseTab),
+            5 => Ok(Self::ReorderTabs),
+            6 => Ok(Self::SetTheme),
+            7 => Ok(Self::SetDimOverlays),
+            _ => Err(()),
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Default)]
 pub struct PhotonAppEffects {
@@ -104,26 +132,32 @@ pub unsafe extern "C" fn photon_app_dispatch(
         return PhotonAppEffects::default();
     };
 
-    let command = match command.kind {
-        1 => AppCommand::CreateTab,
-        2 => AppCommand::OpenSettings,
-        3 => AppCommand::SelectTab(command.value),
-        4 => AppCommand::CloseTab(command.value),
-        5 => {
+    let Ok(kind) = PhotonAppCommandKind::try_from(command.kind) else {
+        return PhotonAppEffects::default();
+    };
+    let command = match kind {
+        PhotonAppCommandKind::CreateTab => AppCommand::CreateTab,
+        PhotonAppCommandKind::OpenSettings => AppCommand::OpenSettings,
+        PhotonAppCommandKind::SelectTab => AppCommand::SelectTab(command.value),
+        PhotonAppCommandKind::CloseTab => AppCommand::CloseTab(command.value),
+        PhotonAppCommandKind::ReorderTabs => {
             // SAFETY: The caller guarantees this buffer remains live for this call.
             let Some(ids) = (unsafe { input_ids(command.ids, command.ids_len) }) else {
                 return PhotonAppEffects::default();
             };
             AppCommand::ReorderTabs(ids)
         }
-        6 => AppCommand::SetTheme(match command.value {
+        PhotonAppCommandKind::SetTheme => AppCommand::SetTheme(match command.value {
             0 => ThemeMode::System,
             1 => ThemeMode::Light,
             2 => ThemeMode::Dark,
             _ => return PhotonAppEffects::default(),
         }),
-        7 => AppCommand::SetDimOverlays(command.value != 0),
-        _ => return PhotonAppEffects::default(),
+        PhotonAppCommandKind::SetDimOverlays => AppCommand::SetDimOverlays(match command.value {
+            0 => false,
+            1 => true,
+            _ => return PhotonAppEffects::default(),
+        }),
     };
 
     state.app.dispatch(command).into()

@@ -14,7 +14,7 @@ PhotonCommand (TypeScript)
 PhotonCommandTransport (temporary navigation adapter)
     ▼
 ChromeSurface → PhotonCommandTransport decoder → Window::dispatch_command
-    ├── BrowserView → typed Rust C ABI / BrowserState → Ladybird WebContentView
+    ├── BrowserView → typed Rust PhotonApp commands/effects → Ladybird WebContentView
     ├── WindowScene → Qt input-capture state
     └── PhotonWindow → Qt window operations
 
@@ -30,13 +30,13 @@ ChromeSurface → photon-state event → React subscribers
 ## Responsibilities
 
 - `Photon/WebUI` owns browser chrome composition, address editing, popovers, and internal-page presentation. It sends typed commands and renders snapshots; it does not own browser or tab state.
-- `Photon/Rust` owns tab order, active-tab identity, internal-page routes, appearance preferences, and each tab's URL, title, loading state, and history capabilities. Ladybird remains authoritative for the history of every web tab.
-- `Photon/Bridge` adapts Rust and Ladybird to Qt. `BrowserView` owns one opaque Rust window-state handle and a separate `WebContentView` for each tab. It routes commands to the active tab and reports engine callbacks back to Rust. `WindowScene` attaches the active view and coordinates composition/input.
+- `Photon/Rust` owns the Photon application decisions and persistent browser state: tab lifecycle/order, active-tab identity, internal-page routes, appearance preferences, and each tab's URL, title, loading state, and history capabilities. `PhotonApp` dispatches typed tab and preference commands and returns typed integration effects. Ladybird remains authoritative for the history of every web tab.
+- `Photon/Bridge` adapts Rust and Ladybird to Qt. `BrowserView` owns one opaque Rust application-state handle and a separate `WebContentView` for each tab. It submits typed application commands, applies Rust-returned effects to native views, and reports engine callbacks back to Rust. `WindowScene` attaches the active view and coordinates composition/input.
 - Ladybird's existing `WebContentView` handles rendering and input. Photon compiles that frontend implementation directly from `UI/Qt`; it does not copy or fork it.
 
 Ladybird is authoritative for the actual current URL, including redirects, links, same-document navigation, and history traversal. It is also authoritative for page titles, loading, and whether history traversal is available. Rust represents that engine-reported state for Photon; a submitted address is never treated as the final URL.
 
-The C ABI uses one opaque `PhotonBrowserState` allocation per window. Rust passes tab identifiers and serializable snapshots only; Ladybird pointers remain in C++.
+The C ABI uses one opaque `PhotonBrowserState` allocation per window. A single `photon_app_dispatch` call carries typed tab/preference operations into Rust and returns the domain effects needed by the adapter. Rust passes tab identifiers and serializable snapshots only; Ladybird pointers remain in C++.
 
 The current Ladybird Qt surface is a `QWidget`/`QRhiWidget`. Photon uses a small QWidget scene coordinator at the integration edge.
 
@@ -51,9 +51,9 @@ The Web UI uses a transparent full-window chrome surface above the active Ladybi
 
 The bundled `load_html` chrome document is trusted. Its top-level navigation hook passes the temporary navigation transport to a Photon-owned decoder, which returns a typed `PhotonCommand`; invalid command requests and other top-level navigation are canceled. `Window::dispatch_command` is the native routing boundary. It sends browser/tab/preferences operations through `BrowserView` to typed Rust state APIs, and sends window/input operations to Qt. Hot-reload mode permits only the pinned `http://127.0.0.1:5173` origin. The ordinary page surface has no Photon command callback or chrome API. The trusted bootstrap encodes its initial snapshot as base64 data before parsing it in JavaScript.
 
-The TypeScript `PhotonCommandTransport` interface keeps the public `window.photon` methods independent of the current URL adapter. Replacing this adapter and the C++ `PhotonCommandTransport` decoder with a dedicated trusted-context native binding should leave React callers, `Window::dispatch_command`, Rust browser-state methods, and snapshot events unchanged. A native binding itself is not available from the current Ladybird surface; see the [bridge audit](Bridge-Audit.md) for the current API, security review, and migration boundary.
+The TypeScript `PhotonCommandTransport` interface keeps the public `window.photon` methods independent of the current URL adapter. Replacing this adapter and the C++ `PhotonCommandTransport` decoder with a dedicated trusted-context native binding should leave React callers, the typed native command model, Rust application commands, and snapshot events unchanged. A native binding itself is not available from the current Ladybird surface; see the [bridge audit](Bridge-Audit.md) for the current API and security review and [Application Architecture](Application-Architecture.md) for the ownership audit and migration plan.
 
-Each Rust tab record has a corresponding Ladybird view in the C++ adapter. Theme mode and tab metadata are Rust-owned; React keeps only temporary interaction state such as an unfinished address edit or an open popover. Native rendering and input plumbing stay in C++, while presentation and animation live in React/CSS.
+Each Rust tab record has a corresponding Ladybird view in the C++ adapter. Rust decides tab lifecycle and preference transitions; C++ applies the returned effects to the native views. Theme mode and tab metadata are Rust-owned; React keeps only temporary interaction state such as an unfinished address edit or an open popover. Native rendering and input plumbing stay in C++, while presentation and animation live in React/CSS.
 
 ## Runtime composition
 
