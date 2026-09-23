@@ -105,7 +105,7 @@ When changing routing, verify toolbar controls and address submission, overlay/s
 
 ## Ladybird patch invariant and workflow
 
-**DO NOT DIRECTLY MODIFY CANONICAL LADYBIRD SOURCE.** The authoritative representation is the patch series. Engine edits are accessible at `.photon/worktree` after `./photon engine edit`; generated build source is accessible at `Build/Source`. Both paths link to Git worktrees beside the checkout so Cargo resolves each worktree's own workspace. Each tree has a separate persistent build directory beside the checkout so CMake caches stay tied to their source roots.
+**DO NOT DIRECTLY MODIFY CANONICAL LADYBIRD SOURCE.** The authoritative representation is the patch series. Engine edits are accessible at `.photon/worktree` after `./photon engine edit`; generated build source is accessible at `Build/Source`. Both paths link to Git worktrees beside the checkout so Cargo resolves each worktree's own workspace. Each worktree builds in its own `Build/` directory; `./photon engine clean` parks those directories beside the checkout before removing the sources.
 
 - Forbidden: an intentional Ladybird change that exists only as a direct edit with no registered patch.
 - Allowed: generated engine worktrees linked at `Build/Source` and `.photon/worktree`; these are not the canonical Git worktree and must never be committed.

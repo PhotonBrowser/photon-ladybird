@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 
@@ -111,7 +113,7 @@ pub(crate) fn verify_edit_tree(repository: &Path) -> Result<()> {
 
 fn verify_edit_tree_path(repository: &Path, tree: &Path) -> Result<()> {
     let upstream = metadata::read_upstream(&repository.join("Meta/Photon/upstream.toml"))?;
-    let revision = git_output(&tree, &["rev-parse", "HEAD"])?;
+    let revision = git_output(tree, &["rev-parse", "HEAD"])?;
     if revision != upstream.revision {
         bail!(
             "engine edit tree is based on {}, expected recorded upstream {}; clean and recreate it before capture",
@@ -227,7 +229,9 @@ fn ensure_tree(repository: &Path, tree: &Path, include_build_link: bool) -> Resu
                 &format!("materialize patch {}", patch.id),
             )?;
         }
-        verify_tree(repository, tree)
+        verify_tree(repository, tree)?;
+        restore_source_mtimes(tree)?;
+        Ok(())
     })();
 
     if let Err(error) = setup {
@@ -288,6 +292,9 @@ fn park_build_directory(repository: &Path, tree: &Path) -> Result<()> {
     if let Some(parent) = persistent.parent() {
         fs::create_dir_all(parent)?;
     }
+    if !metadata.file_type().is_symlink() {
+        save_source_mtimes(tree, &build)?;
+    }
     if metadata.file_type().is_symlink() {
         let target = fs::read_link(&build)?;
         fs::remove_file(&build)?;
@@ -306,6 +313,92 @@ fn park_build_directory(repository: &Path, tree: &Path) -> Result<()> {
         }
         fs::rename(&build, &persistent)?;
     }
+    Ok(())
+}
+
+// Keep source timestamps alongside parked build artifacts. Git worktree recreation
+// gives every checked out file a fresh timestamp, which would make Ninja rebuild
+// the entire engine despite reusing the previous objects.
+fn save_source_mtimes(tree: &Path, build: &Path) -> Result<()> {
+    let output = Command::new("git")
+        .args(["ls-files", "-z"])
+        .current_dir(tree)
+        .output()?;
+    if !output.status.success() {
+        bail!("failed to list engine source files for timestamp preservation");
+    }
+    let diff = Command::new("git")
+        .args(["diff", "--binary", "HEAD"])
+        .current_dir(tree)
+        .output()?;
+    if !diff.status.success() {
+        bail!("failed to record generated engine source state");
+    }
+    let mut manifest = fs::File::create(build.join(".photon-source-mtimes"))?;
+    let mut state = fs::File::create(build.join(".photon-source-state"))?;
+    state.write_all(git_output(tree, &["rev-parse", "HEAD"])?.as_bytes())?;
+    state.write_all(b"\n")?;
+    state.write_all(&diff.stdout)?;
+    for entry in output.stdout.split(|byte| *byte == 0).filter(|entry| !entry.is_empty()) {
+        let relative = std::str::from_utf8(entry)?;
+        let path = tree.join(relative);
+        let metadata = fs::symlink_metadata(path)?;
+        if !metadata.file_type().is_file() {
+            continue;
+        }
+        let modified = match metadata.modified()?.duration_since(UNIX_EPOCH) {
+            Ok(value) => value,
+            Err(_) => Duration::ZERO,
+        };
+        writeln!(
+            manifest,
+            "{}\t{}\t{}",
+            modified.as_secs(),
+            modified.subsec_nanos(),
+            relative
+        )?;
+    }
+    Ok(())
+}
+
+fn restore_source_mtimes(tree: &Path) -> Result<()> {
+    let build = tree.join("Build");
+    let manifest_path = build.join(".photon-source-mtimes");
+    let state_path = build.join(".photon-source-state");
+    if !manifest_path.is_file() || !state_path.is_file() {
+        return Ok(());
+    }
+    let current_diff = Command::new("git")
+        .args(["diff", "--binary", "HEAD"])
+        .current_dir(tree)
+        .output()?;
+    if !current_diff.status.success() {
+        bail!("failed to inspect generated engine source state");
+    }
+    let mut current_state = git_output(tree, &["rev-parse", "HEAD"])?.into_bytes();
+    current_state.push(b'\n');
+    current_state.extend(current_diff.stdout);
+    if fs::read(&state_path)? != current_state {
+        fs::remove_file(manifest_path)?;
+        fs::remove_file(state_path)?;
+        return Ok(());
+    }
+    for line in fs::read_to_string(&manifest_path)?.lines() {
+        let Some((seconds, rest)) = line.split_once('\t') else {
+            continue;
+        };
+        let Some((nanos, relative)) = rest.split_once('\t') else {
+            continue;
+        };
+        let path = tree.join(relative);
+        if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_file()) {
+            let file = fs::File::open(path)?;
+            let time = UNIX_EPOCH + Duration::new(seconds.parse()?, nanos.parse()?);
+            file.set_times(fs::FileTimes::new().set_modified(time))?;
+        }
+    }
+    fs::remove_file(manifest_path)?;
+    fs::remove_file(state_path)?;
     Ok(())
 }
 
@@ -438,11 +531,7 @@ fn path_arg(path: &Path, relative_to: &Path) -> Result<String> {
     } else {
         relative_to.join(path)
     };
-    Ok(path
-        .canonicalize()
-        .or_else(|_| Ok::<PathBuf, std::io::Error>(path))?
-        .to_string_lossy()
-        .into_owned())
+    Ok(path.canonicalize().unwrap_or(path).to_string_lossy().into_owned())
 }
 
 fn git_output(directory: &Path, args: &[&str]) -> Result<String> {
