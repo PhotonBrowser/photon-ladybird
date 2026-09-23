@@ -50,7 +50,7 @@ enum Command {
     Test(TestArgs),
     /// Check the local Photon development environment
     Doctor,
-    /// Fetch Ladybird upstream and merge it into the current branch
+    /// Sync upstream, record its base, and materialize the Photon patch series
     Sync(SyncArgs),
     /// Inspect or update the Photon origin remote
     Remote {
@@ -112,10 +112,6 @@ struct SyncArgs {
     /// Merge the already-fetched upstream tracking ref without fetching
     #[arg(long, conflicts_with = "fetch_only")]
     no_fetch: bool,
-    /// After a clean merge, verify the patch series against the new base
-    /// and record it in Meta/Photon/upstream.toml
-    #[arg(long, conflicts_with = "fetch_only")]
-    record: bool,
 }
 
 #[derive(Debug, Args)]
@@ -187,7 +183,7 @@ fn run() -> Result<i32> {
         Command::Clean => build::clean(&repository, "Release"),
         Command::Test(args) => build::test(&repository, "Release", args.pattern.as_deref(), args.verbose),
         Command::Doctor => doctor::run(&repository),
-        Command::Sync(args) => sync::run(&repository, args.fetch_only, args.record, args.no_fetch),
+        Command::Sync(args) => sync::run(&repository, args.fetch_only, args.no_fetch),
         Command::Remote {
             command: RemoteCommand::Status,
         } => remote::status(&repository),

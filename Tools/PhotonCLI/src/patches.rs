@@ -140,10 +140,9 @@ fn verify_materialized_files(repository: &Path, patches: &[Patch]) -> Result<()>
     result
 }
 
-fn verify_pristine_files(repository: &Path, patches: &[Patch]) -> Result<()> {
-    let upstream = metadata::read_upstream(&repository.join("Meta/Photon/upstream.toml"))?;
+fn verify_pristine_files(repository: &Path, patches: &[Patch], revision: &str) -> Result<()> {
     for path in patch_paths(repository, patches)? {
-        let object = format!("{}:{}", upstream.revision, path.display());
+        let object = format!("{revision}:{}", path.display());
         let exists = Command::new("git")
             .args(["cat-file", "-e", &object])
             .current_dir(repository)
@@ -173,7 +172,8 @@ fn checkout_state(repository: &Path, patches: &[Patch]) -> Result<CheckoutState>
     if verify_materialized_files(repository, patches).is_ok() {
         return Ok(CheckoutState::Materialized);
     }
-    verify_pristine_files(repository, patches)?;
+    let upstream = metadata::read_upstream(&repository.join("Meta/Photon/upstream.toml"))?;
+    verify_pristine_files(repository, patches, &upstream.revision)?;
     Ok(CheckoutState::Pristine)
 }
 
@@ -183,7 +183,7 @@ pub fn ensure_materialized(repository: &Path) -> Result<()> {
     let patches = series(repository)?;
     let upstream = metadata::read_upstream(&repository.join("Meta/Photon/upstream.toml"))?;
     validate_recorded_base(repository, &upstream.revision)
-        .context("run `./photon sync --record` to advance the base before building")?;
+        .context("run `./photon sync` to advance the base before building")?;
     match checkout_state(repository, &patches)? {
         CheckoutState::Materialized => {
             let owned_paths = patch_paths(repository, &patches)?;
@@ -322,6 +322,45 @@ pub(crate) fn is_pristine_at_revision(repository: &Path, revision: &str) -> Resu
         Some(1) => Ok(false),
         _ => bail!("failed to compare Ladybird checkout with upstream {revision}"),
     }
+}
+
+/// Recognize the safe intermediate state after sync merged upstream but the
+/// contributor needed to refresh the registered series. Only unstaged patch
+/// metadata/files may differ; all Ladybird patch-owned paths must still be
+/// pristine at the merged revision.
+pub(crate) fn is_patch_refresh_worktree(repository: &Path, revision: &str) -> Result<bool> {
+    let staged = Command::new("git")
+        .args(["diff", "--cached", "--quiet"])
+        .current_dir(repository)
+        .status()?;
+    if !staged.success() {
+        return Ok(false);
+    }
+
+    let changed = changed_paths(repository)?;
+    if changed.is_empty()
+        || changed
+            .iter()
+            .any(|path| path != Path::new("Patches/series.toml") && !path.starts_with("Patches/ladybird"))
+    {
+        return Ok(false);
+    }
+
+    verify_pristine_files(repository, &series(repository)?, revision)?;
+    is_pristine_ladybird_at_revision(repository, revision)
+}
+
+fn is_pristine_ladybird_at_revision(repository: &Path, revision: &str) -> Result<bool> {
+    let owned_paths = patch_paths(repository, &series(repository)?)?;
+    let changed = changed_paths(repository)?;
+    if changed
+        .iter()
+        .any(|path| is_ladybird_path(path) && !owned_paths.contains(path))
+    {
+        return Ok(false);
+    }
+    let committed = committed_ladybird_paths(repository, revision)?;
+    Ok(committed.is_empty())
 }
 
 /// Remove an already verified patch materialization so Git can merge pristine

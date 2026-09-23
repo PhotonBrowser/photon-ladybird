@@ -10,10 +10,7 @@ use crate::{metadata, patches, ui, upstream};
 const UPSTREAM_TOML: &str = "Meta/Photon/upstream.toml";
 const TRACKING_REFS: [&str; 3] = ["upstream/HEAD", "upstream/master", "upstream/main"];
 
-pub fn run(repository: &Path, fetch_only: bool, record: bool, no_fetch: bool) -> Result<i32> {
-    if fetch_only && record {
-        bail!("--fetch-only and --record are mutually exclusive");
-    }
+pub fn run(repository: &Path, fetch_only: bool, no_fetch: bool) -> Result<i32> {
     if fetch_only && no_fetch {
         bail!("--fetch-only and --no-fetch are mutually exclusive");
     }
@@ -49,6 +46,16 @@ pub fn run(repository: &Path, fetch_only: bool, record: bool, no_fetch: bool) ->
 
     let (target_ref, target_sha) = resolve_target(repository)?;
     ui::kv("Upstream", format!("{} ({target_ref})", ui::sha(&target_sha)));
+
+    // A failed patch application leaves the merged upstream checkout pristine
+    // while the contributor refreshes only Patches/. Let the same sync command
+    // finish that operation without requiring a temporary commit.
+    if is_ancestor(repository, &target_sha, "HEAD")? && patches::is_patch_refresh_worktree(repository, &target_sha)? {
+        check_series_on_revision(repository, &target_sha)?;
+        ui::ok("Refreshed series", "registered patches apply to the merged upstream");
+        return record_revision(repository, &recorded.revision, &target_sha, false);
+    }
+
     let patches_materialized = validate_sync_worktree(repository, &target_sha)?;
     let series_check = check_series_on_revision(repository, &target_sha);
 
@@ -58,13 +65,7 @@ pub fn run(repository: &Path, fetch_only: bool, record: bool, no_fetch: bool) ->
         }
 
         if is_ancestor(repository, &target_sha, "HEAD")? {
-            return Err(error.context(
-                "refresh the registered patches for the merged upstream, then rerun `./photon sync --record`",
-            ));
-        }
-
-        if !record {
-            return Err(error);
+            return Err(error.context("the registered patch series does not apply to this already-merged upstream"));
         }
 
         ui::step(format!(
@@ -87,17 +88,15 @@ pub fn run(repository: &Path, fetch_only: bool, record: bool, no_fetch: bool) ->
 
         ui::ok("Merged", ui::sha(&target_sha));
         ui::failure("The registered patch series does not apply to the merged upstream.");
-        ui::hint("Refresh the affected patches, commit the patch updates, then rerun `./photon sync --record`.");
+        ui::hint("Refresh the affected files in Patches/ladybird and Patches/series.toml, then rerun `./photon sync`.");
+        ui::hint("The second sync accepts an unstaged patch-only refresh; no temporary commit is needed.");
         ui::hint("The recorded upstream base was not changed and no patches were materialized.");
         return Ok(1);
     }
 
     if is_ancestor(repository, &target_sha, "HEAD")? {
         ui::success(format!("Already in sync with {target_ref}."));
-        if record {
-            return record_revision(repository, &recorded.revision, &target_sha, patches_materialized);
-        }
-        return Ok(0);
+        return record_revision(repository, &recorded.revision, &target_sha, patches_materialized);
     }
 
     let incoming = upstream::git(repository, &["rev-list", "--count", &format!("HEAD..{target_sha}")])?;
@@ -130,14 +129,7 @@ pub fn run(repository: &Path, fetch_only: bool, record: bool, no_fetch: bool) ->
 
     check_series_on_revision(repository, &head).context("Photon patch series does not apply to the merged checkout")?;
 
-    if record {
-        return record_revision(repository, &recorded.revision, &target_sha, false);
-    }
-
-    println!();
-    ui::hint("The upstream merge is complete and the verified patch series is unapplied.");
-    ui::hint("Run `./photon sync --record` to record the new base and prepare the build.");
-    Ok(0)
+    record_revision(repository, &recorded.revision, &target_sha, false)
 }
 
 fn record_revision(repository: &Path, recorded: &str, target_sha: &str, patches_materialized: bool) -> Result<i32> {
@@ -150,8 +142,12 @@ fn record_revision(repository: &Path, recorded: &str, target_sha: &str, patches_
 
     if patches_materialized {
         patches::unmaterialize_for_sync(repository)?;
-    } else if !patches::is_pristine_at_revision(repository, target_sha)? {
-        bail!("Ladybird checkout is not pristine at upstream {target_sha}");
+    } else if !patches::is_pristine_at_revision(repository, target_sha)?
+        && !patches::is_patch_refresh_worktree(repository, target_sha)?
+    {
+        bail!(
+            "Ladybird checkout is not pristine at upstream {target_sha}, or contains changes beyond a patch-only refresh"
+        );
     }
 
     let path = repository.join(UPSTREAM_TOML);
