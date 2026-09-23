@@ -14,17 +14,81 @@
 
 #include <QApplication>
 #include <QCloseEvent>
+#include <QEvent>
 #include <QKeyEvent>
 #include <QKeySequence>
+#include <QPainter>
+#include <QPainterPath>
+#include <QRegion>
 #include <QResizeEvent>
 #include <QShortcut>
 #include <QTimer>
 #include <QWindow>
 
+#include <algorithm>
 #include <type_traits>
 #include <variant>
 
 namespace Photon {
+
+#ifdef Q_OS_LINUX
+static constexpr int window_corner_radius = 12;
+
+// On Wayland, a window mask controls input but does not clip the surface.
+// Clear these small regions from Qt's backing store to shape the visible window.
+enum class WindowCornerPosition {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+};
+
+class WindowCorner final : public QWidget {
+public:
+    WindowCorner(WindowCornerPosition position, QWidget& parent)
+        : QWidget(&parent)
+        , m_position(position)
+    {
+        setAttribute(Qt::WA_TranslucentBackground);
+        setAttribute(Qt::WA_NoSystemBackground);
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+    }
+
+protected:
+    virtual void paintEvent(QPaintEvent*) override
+    {
+        auto radius = width();
+        QPainterPath outside;
+        outside.addRect(rect());
+
+        QPointF center;
+        switch (m_position) {
+        case WindowCornerPosition::TopLeft:
+            center = { static_cast<qreal>(radius), static_cast<qreal>(radius) };
+            break;
+        case WindowCornerPosition::TopRight:
+            center = { 0, static_cast<qreal>(radius) };
+            break;
+        case WindowCornerPosition::BottomLeft:
+            center = { static_cast<qreal>(radius), 0 };
+            break;
+        case WindowCornerPosition::BottomRight:
+            center = { 0, 0 };
+            break;
+        }
+
+        QPainterPath inside;
+        inside.addEllipse(center, radius, radius);
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setCompositionMode(QPainter::CompositionMode_Clear);
+        painter.fillPath(outside.subtracted(inside), Qt::transparent);
+    }
+
+private:
+    WindowCornerPosition m_position;
+};
+#endif
 
 template<typename>
 constexpr bool is_unhandled_command = false;
@@ -106,7 +170,21 @@ bool Window::initialize()
 #ifndef Q_OS_MACOS
     setWindowFlag(Qt::FramelessWindowHint);
 #endif
+#ifdef Q_OS_LINUX
+    setAttribute(Qt::WA_TranslucentBackground);
+#endif
     m_scene = new WindowScene(*m_browser, *this);
+#ifdef Q_OS_LINUX
+    constexpr std::array positions {
+        WindowCornerPosition::TopLeft,
+        WindowCornerPosition::TopRight,
+        WindowCornerPosition::BottomLeft,
+        WindowCornerPosition::BottomRight,
+    };
+    for (size_t index = 0; index < positions.size(); ++index)
+        m_window_corners[index] = new WindowCorner(positions[index], *this);
+    update_window_shape();
+#endif
     m_scene->chrome().on_command = [this](PhotonCommand const& command) { dispatch_command(command); };
     m_scene->load_chrome();
     install_web_shortcuts();
@@ -187,6 +265,46 @@ void Window::resizeEvent(QResizeEvent* event)
     QWidget::resizeEvent(event);
     if (m_scene)
         m_scene->setGeometry(rect());
+    update_window_shape();
+}
+
+void Window::changeEvent(QEvent* event)
+{
+    QWidget::changeEvent(event);
+    if (event->type() == QEvent::WindowStateChange)
+        update_window_shape();
+}
+
+void Window::update_window_shape()
+{
+#ifdef Q_OS_LINUX
+    if (!m_window_corners.front())
+        return;
+
+    if (isMaximized() || isFullScreen()) {
+        clearMask();
+        for (auto* corner : m_window_corners)
+            corner->hide();
+        return;
+    }
+
+    auto radius = std::min({ window_corner_radius, width() / 2, height() / 2 });
+    std::array geometries {
+        QRect(0, 0, radius, radius),
+        QRect(width() - radius, 0, radius, radius),
+        QRect(0, height() - radius, radius, radius),
+        QRect(width() - radius, height() - radius, radius, radius),
+    };
+    for (size_t index = 0; index < m_window_corners.size(); ++index) {
+        m_window_corners[index]->setGeometry(geometries[index]);
+        m_window_corners[index]->show();
+        m_window_corners[index]->raise();
+    }
+
+    QPainterPath outline;
+    outline.addRoundedRect(QRectF(rect()), radius, radius);
+    setMask(QRegion(outline.toFillPolygon().toPolygon()));
+#endif
 }
 
 void Window::closeEvent(QCloseEvent* event)
