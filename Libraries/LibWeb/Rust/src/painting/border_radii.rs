@@ -68,7 +68,6 @@ pub(crate) fn scale_radii_to_fit(border_rect: CssPixelRect, mut radii: BorderRad
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BorderRadii {
     pub values: [CssPixels; 8],
-    pub shapes: [i32; 4],
 }
 
 impl BorderRadii {
@@ -102,11 +101,10 @@ impl BorderRadii {
         self.shrink(-top, -right, -bottom, -left);
     }
 
-    fn corner(&self, index: usize, converter: &DevicePixelConverter, shape: f64) -> CornerRadius {
+    fn corner(&self, index: usize, converter: &DevicePixelConverter) -> CornerRadius {
         CornerRadius {
             horizontal_radius: converter.floored_device_pixels(self.values[index]),
             vertical_radius: converter.floored_device_pixels(self.values[index + 1]),
-            shape_milli: (shape * 1000.0).round() as i32,
         }
     }
 
@@ -114,20 +112,15 @@ impl BorderRadii {
         if !self.has_any_radius() {
             return CornerRadii::default();
         }
-        CornerRadii {
-            top_left: self.corner(0, converter, self.shapes[0] as f64 / 1000.0),
-            top_right: self.corner(2, converter, self.shapes[1] as f64 / 1000.0),
-            bottom_right: self.corner(4, converter, self.shapes[2] as f64 / 1000.0),
-            bottom_left: self.corner(6, converter, self.shapes[3] as f64 / 1000.0),
-        }
+        self.corners_unconditionally(converter)
     }
 
     pub fn corners_unconditionally(&self, converter: &DevicePixelConverter) -> CornerRadii {
         CornerRadii {
-            top_left: self.corner(0, converter, self.shapes[0] as f64 / 1000.0),
-            top_right: self.corner(2, converter, self.shapes[1] as f64 / 1000.0),
-            bottom_right: self.corner(4, converter, self.shapes[2] as f64 / 1000.0),
-            bottom_left: self.corner(6, converter, self.shapes[3] as f64 / 1000.0),
+            top_left: self.corner(0, converter),
+            top_right: self.corner(2, converter),
+            bottom_right: self.corner(4, converter),
+            bottom_left: self.corner(6, converter),
         }
     }
 

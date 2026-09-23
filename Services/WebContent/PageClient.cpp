@@ -416,17 +416,6 @@ void PageClient::set_preferred_motion(Web::CSS::PreferredMotion motion)
     page().invalidate_style_for_preference_change();
 }
 
-void PageClient::set_transparent_background(bool transparent)
-{
-    if (m_use_transparent_background == transparent)
-        return;
-
-    m_use_transparent_background = transparent;
-    if (page().has_local_traversable())
-        page().local_traversable()->set_needs_repaint();
-    request_frame();
-}
-
 void PageClient::set_is_scripting_enabled(bool is_scripting_enabled)
 {
     page().set_is_scripting_enabled(is_scripting_enabled);

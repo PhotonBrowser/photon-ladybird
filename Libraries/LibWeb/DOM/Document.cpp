@@ -1609,8 +1609,6 @@ Color Document::background_color() const
 
 Color Document::canvas_background_color() const
 {
-    if (page().client().should_use_transparent_canvas())
-        return background_color();
     return CSS::SystemColor::canvas(canvas_color_scheme()).blend(background_color());
 }
 

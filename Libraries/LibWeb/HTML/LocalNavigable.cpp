@@ -6666,7 +6666,7 @@ bool LocalNavigable::record_display_list_and_scroll_state(PaintConfig paint_conf
 
     // Hit testing can publish a display list before the next frame. Give both paths the same canvas fill so that
     // switching between them does not force another recording. Screenshots can supply their own fill rectangle.
-    if (is_local_root() && !paint_config.canvas_fill_rect.has_value() && !page().client().should_use_transparent_canvas()) {
+    if (is_local_root() && !paint_config.canvas_fill_rect.has_value()) {
         auto viewport_size = page().css_to_device_rect(viewport_rect()).size().to_type<int>();
         paint_config.canvas_fill_rect = Gfx::IntRect { {}, viewport_size };
     }

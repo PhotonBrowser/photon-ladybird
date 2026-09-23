@@ -111,8 +111,6 @@ public:
     virtual bool event(QEvent*) override;
 
     void set_viewport_rect(Gfx::IntRect);
-    // Allows a host scene to compose this view above another surface.
-    void set_transparent_background(bool);
     void push_viewport_size();
     void set_device_pixel_ratio(double);
     void set_zoom_level(double);

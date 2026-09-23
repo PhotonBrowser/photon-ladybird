@@ -1424,11 +1424,6 @@ void WebContentPage::did_request_navigation_start(Web::HTML::CrossProcessId navi
         return;
     }
 
-    if (target == Web::NavigationTarget::TopLevel && view().on_navigation_request && view().on_navigation_request(url)) {
-        async_cancel_navigation_params_creation(navigable_id, navigation_id);
-        return;
-    }
-
     auto sequence_number = target_navigable->top_level_traversable().next_sequence_number();
     if (auto const& ongoing_navigation = target_navigable->ongoing_navigation(); ongoing_navigation.has_value()
         && ongoing_navigation->sequence_number != 0

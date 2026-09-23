@@ -140,7 +140,6 @@ endif()
 if (ENABLE_GUI_TARGETS)
     add_subdirectory(Services)
     add_subdirectory(UI)
-    add_subdirectory(Photon)
 endif()
 
 add_custom_target(lint-shell-scripts
