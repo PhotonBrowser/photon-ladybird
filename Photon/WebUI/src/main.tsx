@@ -76,6 +76,7 @@ const photon: PhotonApi = {
         platform,
         beginDrag: () => commandTransport.dispatch({ kind: "window-start-system-move" }),
         minimize: () => commandTransport.dispatch({ kind: "window-minimize" }),
+        maximize: () => commandTransport.dispatch({ kind: "window-maximize" }),
         toggleMaximize: () => commandTransport.dispatch({ kind: "window-toggle-maximize" }),
         close: () => commandTransport.dispatch({ kind: "window-close" }),
     },

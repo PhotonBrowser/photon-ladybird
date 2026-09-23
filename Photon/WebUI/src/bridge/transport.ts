@@ -16,6 +16,7 @@ export type PhotonCommand =
     | { kind: "set-force-dark-pages"; enabled: boolean }
     | { kind: "set-dim-overlays"; enabled: boolean }
     | { kind: "window-minimize" }
+    | { kind: "window-maximize" }
     | { kind: "window-toggle-maximize" }
     | { kind: "window-close" }
     | { kind: "window-start-system-move" };
@@ -55,6 +56,7 @@ function serializeCommand(command: PhotonCommand): { name: string; value?: strin
         case "window-start-system-move":
             return { name: "window-drag" };
         case "window-minimize":
+        case "window-maximize":
         case "window-toggle-maximize":
         case "window-close":
         case "back":

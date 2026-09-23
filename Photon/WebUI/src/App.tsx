@@ -117,6 +117,12 @@ export default function App({ api }: AppProps): React.JSX.Element {
                     onPointerDown={(event) => {
                         if (event.button !== 0 || (event.target as Element).closest("button, input, a, [role='tab']"))
                             return;
+                        // Handle the second press before another native move can claim the gesture.
+                        if (event.detail === 2) {
+                            api.window.maximize();
+                            return;
+                        }
+                        if (event.detail > 2) return;
                         api.window.beginDrag();
                     }}
                 >

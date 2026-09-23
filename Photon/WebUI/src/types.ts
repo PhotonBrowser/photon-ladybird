@@ -56,6 +56,7 @@ export interface PhotonWindow {
     platform: "macos" | "other";
     beginDrag(): void;
     minimize(): void;
+    maximize(): void;
     toggleMaximize(): void;
     close(): void;
 }
