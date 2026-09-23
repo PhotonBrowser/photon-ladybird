@@ -60,6 +60,7 @@ struct SetOverlayCaptureCommand {
 
 enum class WindowCommand {
     Minimize,
+    Maximize,
     ToggleMaximize,
     Close,
     StartSystemMove,

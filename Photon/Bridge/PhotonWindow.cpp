@@ -17,6 +17,7 @@
 #include <QEvent>
 #include <QKeyEvent>
 #include <QKeySequence>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QRegion>
@@ -33,6 +34,7 @@ namespace Photon {
 
 #ifdef Q_OS_LINUX
 static constexpr int window_corner_radius = 12;
+static constexpr int resize_handle_width = 6;
 
 // On Wayland, a window mask controls input but does not clip the surface.
 // Clear these small regions from Qt's backing store to shape the visible window.
@@ -87,6 +89,31 @@ protected:
 
 private:
     WindowCornerPosition m_position;
+};
+
+class WindowResizeHandle final : public QWidget {
+public:
+    WindowResizeHandle(Qt::Edges edges, Qt::CursorShape cursor, QWidget& parent)
+        : QWidget(&parent)
+        , m_edges(edges)
+    {
+        setAttribute(Qt::WA_NoSystemBackground);
+        setCursor(cursor);
+    }
+
+protected:
+    virtual void mousePressEvent(QMouseEvent* event) override
+    {
+        auto* window_handle = window()->windowHandle();
+        if (event->button() == Qt::LeftButton && window_handle && window_handle->startSystemResize(m_edges)) {
+            event->accept();
+            return;
+        }
+        QWidget::mousePressEvent(event);
+    }
+
+private:
+    Qt::Edges m_edges;
 };
 #endif
 
@@ -183,6 +210,28 @@ bool Window::initialize()
     };
     for (size_t index = 0; index < positions.size(); ++index)
         m_window_corners[index] = new WindowCorner(positions[index], *this);
+    constexpr std::array resize_edges {
+        Qt::Edges(Qt::TopEdge),
+        Qt::Edges(Qt::BottomEdge),
+        Qt::Edges(Qt::LeftEdge),
+        Qt::Edges(Qt::RightEdge),
+        Qt::Edges(Qt::TopEdge | Qt::LeftEdge),
+        Qt::Edges(Qt::TopEdge | Qt::RightEdge),
+        Qt::Edges(Qt::BottomEdge | Qt::LeftEdge),
+        Qt::Edges(Qt::BottomEdge | Qt::RightEdge),
+    };
+    constexpr std::array resize_cursors {
+        Qt::SizeVerCursor,
+        Qt::SizeVerCursor,
+        Qt::SizeHorCursor,
+        Qt::SizeHorCursor,
+        Qt::SizeFDiagCursor,
+        Qt::SizeBDiagCursor,
+        Qt::SizeBDiagCursor,
+        Qt::SizeFDiagCursor,
+    };
+    for (size_t index = 0; index < resize_edges.size(); ++index)
+        m_resize_handles[index] = new WindowResizeHandle(resize_edges[index], resize_cursors[index], *this);
     update_window_shape();
 #endif
     m_scene->chrome().on_command = [this](PhotonCommand const& command) { dispatch_command(command); };
@@ -232,6 +281,9 @@ void Window::dispatch_command(PhotonCommand const& command)
             switch (typed_command.command) {
             case WindowCommand::Minimize:
                 showMinimized();
+                break;
+            case WindowCommand::Maximize:
+                showMaximized();
                 break;
             case WindowCommand::ToggleMaximize:
                 isMaximized() ? showNormal() : showMaximized();
@@ -285,6 +337,8 @@ void Window::update_window_shape()
         clearMask();
         for (auto* corner : m_window_corners)
             corner->hide();
+        for (auto* handle : m_resize_handles)
+            handle->hide();
         return;
     }
 
@@ -299,6 +353,24 @@ void Window::update_window_shape()
         m_window_corners[index]->setGeometry(geometries[index]);
         m_window_corners[index]->show();
         m_window_corners[index]->raise();
+    }
+
+    auto edge_length_x = std::max(0, width() - 2 * radius);
+    auto edge_length_y = std::max(0, height() - 2 * radius);
+    std::array resize_geometries {
+        QRect(radius, 0, edge_length_x, resize_handle_width),
+        QRect(radius, height() - resize_handle_width, edge_length_x, resize_handle_width),
+        QRect(0, radius, resize_handle_width, edge_length_y),
+        QRect(width() - resize_handle_width, radius, resize_handle_width, edge_length_y),
+        QRect(0, 0, radius, radius),
+        QRect(width() - radius, 0, radius, radius),
+        QRect(0, height() - radius, radius, radius),
+        QRect(width() - radius, height() - radius, radius, radius),
+    };
+    for (size_t index = 0; index < m_resize_handles.size(); ++index) {
+        m_resize_handles[index]->setGeometry(resize_geometries[index]);
+        m_resize_handles[index]->show();
+        m_resize_handles[index]->raise();
     }
 
     QPainterPath outline;

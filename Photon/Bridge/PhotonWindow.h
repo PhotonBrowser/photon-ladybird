@@ -45,6 +45,7 @@ private:
     WindowScene* m_scene { nullptr };
 #ifdef Q_OS_LINUX
     std::array<QWidget*, 4> m_window_corners { };
+    std::array<QWidget*, 8> m_resize_handles { };
 #endif
 };
 

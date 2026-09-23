@@ -55,6 +55,8 @@ std::optional<PhotonCommand> PhotonCommandTransport::decode(URL::URL const& url)
 
     if (command == QStringLiteral("window-minimize") && no_arguments())
         return WindowControlCommand { WindowCommand::Minimize };
+    if (command == QStringLiteral("window-maximize") && no_arguments())
+        return WindowControlCommand { WindowCommand::Maximize };
     if (command == QStringLiteral("window-toggle-maximize") && no_arguments())
         return WindowControlCommand { WindowCommand::ToggleMaximize };
     if (command == QStringLiteral("window-close") && no_arguments())
