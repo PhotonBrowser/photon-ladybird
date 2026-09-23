@@ -64,6 +64,7 @@ public:
     Q_INVOKABLE void close_tab(uint64_t tab_id);
     Q_INVOKABLE void reorder_tabs(QList<uint64_t> const& tab_ids);
     void set_theme_mode(ThemeMode mode);
+    void set_force_dark_pages(bool enabled);
     void set_dim_overlays(bool enabled);
     void load_initial_url();
 
@@ -88,6 +89,7 @@ private:
     void emit_active_tab_state_changed();
     void sync_view_visibility();
     void apply_app_effects(PhotonAppEffects const&);
+    void apply_page_appearance(Ladybird::WebContentView&);
 
     QWidget& m_host;
     QHash<uint64_t, Ladybird::WebContentView*> m_views;

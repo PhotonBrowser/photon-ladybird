@@ -61,6 +61,7 @@ pub(crate) struct BrowserState {
     active_tab_id: u64,
     next_tab_id: u64,
     theme_mode: ThemeMode,
+    force_dark_pages: bool,
     dim_overlays: bool,
     config_path: Option<PathBuf>,
 }
@@ -90,6 +91,7 @@ impl BrowserState {
             active_tab_id: 1,
             next_tab_id: 2,
             theme_mode: config.theme_mode,
+            force_dark_pages: config.force_dark_pages,
             dim_overlays: config.dim_overlays,
             config_path,
         }
@@ -99,6 +101,7 @@ impl BrowserState {
         if let Some(path) = &self.config_path {
             PhotonConfig {
                 theme_mode: self.theme_mode,
+                force_dark_pages: self.force_dark_pages,
                 dim_overlays: self.dim_overlays,
             }
             .save(path);
@@ -167,6 +170,19 @@ impl BrowserState {
             return false;
         }
         self.theme_mode = mode;
+        self.save_config();
+        true
+    }
+
+    pub(crate) fn force_dark_pages(&self) -> bool {
+        self.force_dark_pages
+    }
+
+    pub(crate) fn set_force_dark_pages(&mut self, enabled: bool) -> bool {
+        if self.force_dark_pages == enabled {
+            return false;
+        }
+        self.force_dark_pages = enabled;
         self.save_config();
         true
     }
@@ -366,8 +382,8 @@ impl BrowserState {
             ThemeMode::Dark => "dark",
         };
         format!(
-            "{{\"tabs\":[{tabs}],\"activeTabId\":\"tab-{}\",\"themeMode\":\"{theme_mode}\",\"dimOverlays\":{}}}",
-            self.active_tab_id, self.dim_overlays
+            "{{\"tabs\":[{tabs}],\"activeTabId\":\"tab-{}\",\"themeMode\":\"{theme_mode}\",\"forceDarkPages\":{},\"dimOverlays\":{}}}",
+            self.active_tab_id, self.force_dark_pages, self.dim_overlays
         )
     }
 }
@@ -600,7 +616,7 @@ mod tests {
         let state = BrowserState::initial();
         assert_eq!(
             state.snapshot_json(),
-            "{\"tabs\":[{\"id\":\"tab-1\",\"url\":\"photon://newtab\",\"title\":\"New Tab\",\"faviconUrl\":null,\"internalPage\":\"new-tab\",\"loading\":false,\"canGoBack\":false,\"canGoForward\":false}],\"activeTabId\":\"tab-1\",\"themeMode\":\"system\",\"dimOverlays\":false}"
+            "{\"tabs\":[{\"id\":\"tab-1\",\"url\":\"photon://newtab\",\"title\":\"New Tab\",\"faviconUrl\":null,\"internalPage\":\"new-tab\",\"loading\":false,\"canGoBack\":false,\"canGoForward\":false}],\"activeTabId\":\"tab-1\",\"themeMode\":\"system\",\"forceDarkPages\":false,\"dimOverlays\":false}"
         );
     }
 

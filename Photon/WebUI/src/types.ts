@@ -18,6 +18,7 @@ export interface BrowserSnapshot {
     tabs: BrowserTab[];
     activeTabId: string;
     themeMode: ThemeMode;
+    forceDarkPages: boolean;
     dimOverlays: boolean;
 }
 
@@ -47,6 +48,7 @@ export interface PhotonUi {
 
 export interface PhotonSettings {
     setTheme(mode: ThemeMode): void;
+    setForceDarkPages(enabled: boolean): void;
     setDimOverlays(enabled: boolean): void;
 }
 

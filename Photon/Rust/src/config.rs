@@ -12,6 +12,7 @@ use crate::browser::ThemeMode;
 #[serde(default)]
 pub(crate) struct PhotonConfig {
     pub(crate) theme_mode: ThemeMode,
+    pub(crate) force_dark_pages: bool,
     pub(crate) dim_overlays: bool,
 }
 
@@ -19,6 +20,7 @@ impl Default for PhotonConfig {
     fn default() -> Self {
         Self {
             theme_mode: ThemeMode::System,
+            force_dark_pages: false,
             dim_overlays: false,
         }
     }

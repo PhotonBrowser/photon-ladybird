@@ -41,6 +41,9 @@ enum class ThemeMode {
 struct SetThemeCommand {
     ThemeMode mode;
 };
+struct SetForceDarkPagesCommand {
+    bool enabled;
+};
 struct SetDimOverlaysCommand {
     bool enabled;
 };
@@ -77,6 +80,7 @@ using PhotonCommand = std::variant<
     CloseTabCommand,
     ReorderTabsCommand,
     SetThemeCommand,
+    SetForceDarkPagesCommand,
     SetDimOverlaysCommand,
     SetOverlayCaptureCommand,
     WindowControlCommand>;

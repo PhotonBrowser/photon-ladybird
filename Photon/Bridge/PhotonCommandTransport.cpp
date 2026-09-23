@@ -108,6 +108,14 @@ std::optional<PhotonCommand> PhotonCommandTransport::decode(URL::URL const& url)
         return { };
     }
 
+    if (command == QStringLiteral("set-force-dark-pages")) {
+        if (value == QStringLiteral("true"))
+            return SetForceDarkPagesCommand { true };
+        if (value == QStringLiteral("false"))
+            return SetForceDarkPagesCommand { false };
+        return { };
+    }
+
     if (command == QStringLiteral("capture")) {
         auto parts = value.split(QLatin1Char(':'), Qt::KeepEmptyParts);
         if (parts.size() != 2 || (parts[1] != QStringLiteral("open") && parts[1] != QStringLiteral("close")))

@@ -46,6 +46,7 @@ typedef struct PhotonAppEffects {
     uint8_t tabs_changed;
     uint8_t active_tab_changed;
     uint8_t theme_changed;
+    uint8_t force_dark_pages_changed;
     uint64_t created_tab_id;
     uint64_t removed_tab_id;
 } PhotonAppEffects;
@@ -58,6 +59,7 @@ enum PhotonAppCommandKind {
     PhotonAppCommandKind_ReorderTabs = 5,
     PhotonAppCommandKind_SetTheme = 6,
     PhotonAppCommandKind_SetDimOverlays = 7,
+    PhotonAppCommandKind_SetForceDarkPages = 8,
 };
 
 PhotonBrowserState* photon_browser_state_new(uint8_t const* config_path, size_t config_path_len);
@@ -73,6 +75,7 @@ uint64_t photon_browser_active_tab_id(PhotonBrowserState const* state);
 uint64_t photon_browser_adjacent_tab_id(PhotonBrowserState const* state, uint8_t previous);
 uint8_t photon_browser_is_internal_page(PhotonBrowserState const* state);
 uint8_t photon_browser_theme_mode(PhotonBrowserState const* state);
+uint8_t photon_browser_force_dark_pages(PhotonBrowserState const* state);
 PhotonUtf8 photon_browser_tabs_json(PhotonBrowserState* state);
 PhotonAppEffects photon_app_dispatch(PhotonBrowserState* state, PhotonAppCommand command);
 

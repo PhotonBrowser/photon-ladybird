@@ -47,6 +47,7 @@ enum PhotonAppCommandKind {
     ReorderTabs = 5,
     SetTheme = 6,
     SetDimOverlays = 7,
+    SetForceDarkPages = 8,
 }
 
 impl TryFrom<u32> for PhotonAppCommandKind {
@@ -61,6 +62,7 @@ impl TryFrom<u32> for PhotonAppCommandKind {
             5 => Ok(Self::ReorderTabs),
             6 => Ok(Self::SetTheme),
             7 => Ok(Self::SetDimOverlays),
+            8 => Ok(Self::SetForceDarkPages),
             _ => Err(()),
         }
     }
@@ -74,6 +76,7 @@ pub struct PhotonAppEffects {
     pub tabs_changed: u8,
     pub active_tab_changed: u8,
     pub theme_changed: u8,
+    pub force_dark_pages_changed: u8,
     pub created_tab_id: u64,
     pub removed_tab_id: u64,
 }
@@ -86,6 +89,7 @@ impl From<AppEffects> for PhotonAppEffects {
             tabs_changed: effects.tabs_changed.into(),
             active_tab_changed: effects.active_tab_changed.into(),
             theme_changed: effects.theme_changed.into(),
+            force_dark_pages_changed: effects.force_dark_pages_changed.into(),
             created_tab_id: effects.created_tab_id,
             removed_tab_id: effects.removed_tab_id,
         }
@@ -154,6 +158,11 @@ pub unsafe extern "C" fn photon_app_dispatch(
             _ => return PhotonAppEffects::default(),
         }),
         PhotonAppCommandKind::SetDimOverlays => AppCommand::SetDimOverlays(match command.value {
+            0 => false,
+            1 => true,
+            _ => return PhotonAppEffects::default(),
+        }),
+        PhotonAppCommandKind::SetForceDarkPages => AppCommand::SetForceDarkPages(match command.value {
             0 => false,
             1 => true,
             _ => return PhotonAppEffects::default(),
@@ -239,6 +248,14 @@ pub unsafe extern "C" fn photon_browser_theme_mode(state: *const PhotonBrowserSt
         Some(ThemeMode::Dark) => 2,
         _ => 0,
     }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn photon_browser_force_dark_pages(state: *const PhotonBrowserState) -> u8 {
+    // SAFETY: Native code keeps the state alive for the duration of this call.
+    unsafe { state.as_ref() }
+        .is_some_and(|state| state.app.browser.force_dark_pages())
+        .into()
 }
 
 #[unsafe(no_mangle)]

@@ -144,6 +144,8 @@ void Window::dispatch_command(PhotonCommand const& command)
             m_browser->reorder_tabs(typed_command.tab_ids);
         else if constexpr (std::is_same_v<Command, SetThemeCommand>)
             m_browser->set_theme_mode(typed_command.mode);
+        else if constexpr (std::is_same_v<Command, SetForceDarkPagesCommand>)
+            m_browser->set_force_dark_pages(typed_command.enabled);
         else if constexpr (std::is_same_v<Command, SetDimOverlaysCommand>)
             m_browser->set_dim_overlays(typed_command.enabled);
         else if constexpr (std::is_same_v<Command, SetOverlayCaptureCommand>)

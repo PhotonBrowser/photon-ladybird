@@ -13,6 +13,7 @@ export type PhotonCommand =
     | { kind: "reorder-tabs"; tabIds: string[] }
     | { kind: "capture"; region: "browser-menu" | "site-info"; open: boolean }
     | { kind: "set-theme"; mode: ThemeMode }
+    | { kind: "set-force-dark-pages"; enabled: boolean }
     | { kind: "set-dim-overlays"; enabled: boolean }
     | { kind: "window-minimize" }
     | { kind: "window-toggle-maximize" }
@@ -49,6 +50,7 @@ function serializeCommand(command: PhotonCommand): { name: string; value?: strin
         case "set-theme":
             return { name: command.kind, value: command.mode };
         case "set-dim-overlays":
+        case "set-force-dark-pages":
             return { name: command.kind, value: String(command.enabled) };
         case "window-start-system-move":
             return { name: "window-drag" };

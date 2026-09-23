@@ -10,7 +10,9 @@
 #include <AK/Base64.h>
 #include <LibGfx/ImageFormats/PNGWriter.h>
 #include <LibWeb/CSS/PreferredColorScheme.h>
+#include <LibWebView/CanonicalTraversable.h>
 #include <LibWebView/Menu.h>
+#include <LibWebView/WebContentPage.h>
 #include <Photon/Rust/PhotonCore.h>
 #include <UI/Qt/StringUtils.h>
 #include <UI/Qt/WebContentView.h>
@@ -162,18 +164,30 @@ Web::CSS::PreferredColorScheme BrowserView::preferred_color_scheme() const
 
 void BrowserView::refresh_preferred_color_scheme()
 {
-    auto color_scheme = preferred_color_scheme();
     for (auto* view : m_views)
-        view->set_preferred_color_scheme(color_scheme);
+        apply_page_appearance(*view);
     emit browser_state_changed();
+}
+
+void BrowserView::apply_page_appearance(Ladybird::WebContentView& view)
+{
+    view.set_preferred_color_scheme(preferred_color_scheme());
+    auto force_dark = photon_browser_force_dark_pages(m_state) ? "on"sv : "off"sv;
+    view.traversable().for_each_hosting_page([&](WebView::WebContentPage& page) {
+        page.async_debug_request("set-force-dark"sv, force_dark);
+    });
 }
 
 Ladybird::WebContentView& BrowserView::create_view(uint64_t tab_id)
 {
     auto* view = new Ladybird::WebContentView(&m_host);
     m_views.insert(tab_id, view);
-    view->set_preferred_color_scheme(preferred_color_scheme());
+    apply_page_appearance(*view);
     view->hide();
+    // A cross-site navigation can replace the hosting WebContent process.
+    view->on_load_finish = [this, view](URL::URL const&) {
+        apply_page_appearance(*view);
+    };
     view->on_url_change = [this, tab_id](URL::URL const& url) {
         update_url(tab_id, qstring_from_ak_string(url.serialize()));
     };
@@ -313,6 +327,11 @@ void BrowserView::set_theme_mode(ThemeMode mode)
     apply_app_effects(dispatch_app_command(m_state, PhotonAppCommandKind_SetTheme, static_cast<uint64_t>(value)));
 }
 
+void BrowserView::set_force_dark_pages(bool enabled)
+{
+    apply_app_effects(dispatch_app_command(m_state, PhotonAppCommandKind_SetForceDarkPages, enabled));
+}
+
 void BrowserView::set_dim_overlays(bool enabled)
 {
     apply_app_effects(dispatch_app_command(m_state, PhotonAppCommandKind_SetDimOverlays, enabled));
@@ -335,7 +354,7 @@ void BrowserView::apply_app_effects(PhotonAppEffects const& effects)
         emit active_tab_changed();
     if (removed_view)
         removed_view->deleteLater();
-    if (effects.theme_changed)
+    if (effects.theme_changed || effects.force_dark_pages_changed)
         refresh_preferred_color_scheme();
     else if (effects.active_tab_changed) {
         if (!active_tab_signal_emitted)

@@ -16,7 +16,12 @@ const themeOptions: Array<{ id: ThemeMode; label: string }> = [
     { id: "dark", label: "Dark" },
 ];
 
-export function SettingsPage({ api, snapshot, themeDropdownOpen, onThemeDropdownOpenChange }: SettingsPageProps): React.JSX.Element {
+export function SettingsPage({
+    api,
+    snapshot,
+    themeDropdownOpen,
+    onThemeDropdownOpenChange,
+}: SettingsPageProps): React.JSX.Element {
     return (
         <main aria-labelledby="settings-title" className="photon-internal-page photon-settings-page">
             <div className="photon-settings-content">
@@ -64,8 +69,25 @@ export function SettingsPage({ api, snapshot, themeDropdownOpen, onThemeDropdown
                         </div>
                         <label className="photon-settings-toggle-row">
                             <span className="photon-settings-copy">
-                                <span className="photon-settings-toggle-title">Dim background for popovers and dropdowns</span>
-                                <span className="photon-settings-toggle-description">Darken the page behind open overlays.</span>
+                                <span className="photon-settings-toggle-title">Force dark web pages</span>
+                                <span className="photon-settings-toggle-description">
+                                    Darken sites that do not provide their own dark theme.
+                                </span>
+                            </span>
+                            <input
+                                checked={snapshot.forceDarkPages}
+                                onChange={(event) => api.settings.setForceDarkPages(event.currentTarget.checked)}
+                                type="checkbox"
+                            />
+                        </label>
+                        <label className="photon-settings-toggle-row">
+                            <span className="photon-settings-copy">
+                                <span className="photon-settings-toggle-title">
+                                    Dim background for popovers and dropdowns
+                                </span>
+                                <span className="photon-settings-toggle-description">
+                                    Darken the page behind open overlays.
+                                </span>
                             </span>
                             <input
                                 checked={snapshot.dimOverlays}

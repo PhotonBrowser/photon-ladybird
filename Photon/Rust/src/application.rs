@@ -14,6 +14,7 @@ pub(crate) enum AppCommand<'a> {
     CloseTab(u64),
     ReorderTabs(&'a [u64]),
     SetTheme(ThemeMode),
+    SetForceDarkPages(bool),
     SetDimOverlays(bool),
 }
 
@@ -24,6 +25,7 @@ pub(crate) struct AppEffects {
     pub(crate) tabs_changed: bool,
     pub(crate) active_tab_changed: bool,
     pub(crate) theme_changed: bool,
+    pub(crate) force_dark_pages_changed: bool,
     pub(crate) created_tab_id: u64,
     pub(crate) removed_tab_id: u64,
 }
@@ -75,6 +77,11 @@ impl PhotonApp {
                 effects.theme_changed = self.browser.set_theme_mode(mode);
                 effects.accepted = effects.theme_changed;
                 effects.state_changed = effects.theme_changed;
+            }
+            AppCommand::SetForceDarkPages(enabled) => {
+                effects.force_dark_pages_changed = self.browser.set_force_dark_pages(enabled);
+                effects.accepted = effects.force_dark_pages_changed;
+                effects.state_changed = effects.force_dark_pages_changed;
             }
             AppCommand::SetDimOverlays(enabled) => {
                 effects.state_changed = self.browser.set_dim_overlays(enabled);

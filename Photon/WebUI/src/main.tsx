@@ -23,6 +23,7 @@ const developmentSnapshot: BrowserSnapshot = {
     ],
     activeTabId: "tab-1",
     themeMode: "system",
+    forceDarkPages: false,
     dimOverlays: false,
 };
 
@@ -68,6 +69,7 @@ const photon: PhotonApi = {
     },
     settings: {
         setTheme: (mode) => commandTransport.dispatch({ kind: "set-theme", mode }),
+        setForceDarkPages: (enabled) => commandTransport.dispatch({ kind: "set-force-dark-pages", enabled }),
         setDimOverlays: (enabled) => commandTransport.dispatch({ kind: "set-dim-overlays", enabled }),
     },
     window: {
@@ -105,6 +107,7 @@ function isBrowserSnapshot(value: unknown): value is BrowserSnapshot {
         Array.isArray(candidate.tabs) &&
         typeof candidate.activeTabId === "string" &&
         parseThemeMode(candidate.themeMode) !== undefined &&
+        typeof candidate.forceDarkPages === "boolean" &&
         typeof candidate.dimOverlays === "boolean"
     );
 }
