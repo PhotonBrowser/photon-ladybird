@@ -35,13 +35,20 @@ public:
     void clear_open_overlays();
 
 protected:
+    virtual void paintEvent(QPaintEvent*) override;
     virtual void resizeEvent(QResizeEvent*) override;
     virtual bool eventFilter(QObject*, QEvent*) override;
 
 private:
     static constexpr int chrome_toolbar_height = 72;
+    static constexpr int page_inset = 4;
+    static constexpr int page_corner_radius = 6;
 
     QRect page_rect() const;
+    QRect page_view_rect() const;
+    bool page_contains(QPoint) const;
+    void update_background_color();
+    void update_page_geometry();
     bool chrome_owns_point(QPoint) const;
     bool has_open_overlays() const;
     void forward_mouse_event(QEvent*);

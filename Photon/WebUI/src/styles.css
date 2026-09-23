@@ -64,6 +64,8 @@
     --photon-titlebar-height: 36px;
     --photon-toolbar-height: 36px;
     --photon-chrome-height: calc(var(--photon-titlebar-height) + var(--photon-toolbar-height));
+    --photon-page-inset: 4px;
+    --photon-page-radius: 6px;
     --photon-control-size: 28px;
     --photon-tab-height: 29px;
     --photon-tab-min-width: 82px;
@@ -218,6 +220,15 @@ button {
     height: var(--photon-chrome-height);
     background: var(--photon-color-canvas);
     pointer-events: auto;
+}
+
+.photon-page-frame {
+    position: fixed;
+    z-index: 0;
+    inset: var(--photon-chrome-height) 0 0;
+    border: var(--photon-page-inset) solid var(--photon-color-canvas);
+    border-radius: calc(var(--photon-page-radius) + var(--photon-page-inset));
+    pointer-events: none;
 }
 
 .photon-overlay-scrim {

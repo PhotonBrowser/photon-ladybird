@@ -9,14 +9,19 @@
 #include <Photon/Bridge/PhotonApplication.h>
 #include <Photon/Bridge/WindowScene.h>
 
+#include <LibWeb/CSS/PreferredColorScheme.h>
 #include <UI/Qt/WebContentView.h>
 
 #include <algorithm>
 #include <utility>
 
+#include <QColor>
 #include <QEvent>
 #include <QGuiApplication>
 #include <QMouseEvent>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPalette>
 #include <QResizeEvent>
 #include <QStyleHints>
 #include <QWheelEvent>
@@ -30,12 +35,13 @@ WindowScene::WindowScene(BrowserView& browser, QWidget& parent)
 {
     m_chrome_cursor = m_chrome->view().cursor();
     setAttribute(Qt::WA_TranslucentBackground);
+    update_background_color();
     parent.installEventFilter(this);
     m_active_page_view = &m_browser.widget();
     m_chrome->view().set_preferred_color_scheme(m_browser.preferred_color_scheme());
     m_active_page_view->setParent(this);
     m_active_page_view->installEventFilter(this);
-    m_active_page_view->setGeometry(page_rect());
+    update_page_geometry();
     m_active_page_view->setVisible(!m_browser.is_internal_page());
     m_chrome->view().setParent(this);
     auto chrome_cursor_changed = std::move(m_chrome->view().on_cursor_change);
@@ -56,7 +62,7 @@ WindowScene::WindowScene(BrowserView& browser, QWidget& parent)
         m_active_page_view = &m_browser.widget();
         m_active_page_view->setParent(this);
         m_active_page_view->installEventFilter(this);
-        m_active_page_view->setGeometry(page_rect());
+        update_page_geometry();
         m_active_page_view->setVisible(!m_browser.is_internal_page());
         m_active_page_view->lower();
         m_chrome->view().raise();
@@ -75,6 +81,7 @@ WindowScene::WindowScene(BrowserView& browser, QWidget& parent)
     QObject::connect(&m_browser, &BrowserView::browser_state_changed, this, [this] {
         m_active_page_view->setVisible(!m_browser.is_internal_page());
         m_chrome->view().set_preferred_color_scheme(m_browser.preferred_color_scheme());
+        update_background_color();
         m_chrome->update_state(m_browser);
     });
     QObject::connect(&m_browser, &BrowserView::page_tooltip_changed, this, [this](QString text, QPoint position) {
@@ -148,14 +155,56 @@ void WindowScene::clear_open_overlays()
 void WindowScene::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
-    m_browser.widget().setGeometry(page_rect());
+    update_page_geometry();
     m_chrome->view().setGeometry(rect());
+}
+
+void WindowScene::paintEvent(QPaintEvent*)
+{
+    QPainter painter(this);
+    painter.fillRect(rect(), palette().color(QPalette::Window));
 }
 
 QRect WindowScene::page_rect() const
 {
     auto top = std::min(chrome_toolbar_height, height());
+    auto horizontal_inset = std::min(page_inset, width() / 2);
+    auto vertical_inset = std::min(page_inset, std::max(0, height() - top) / 2);
+    return { horizontal_inset, top + vertical_inset, std::max(0, width() - horizontal_inset * 2), std::max(0, height() - top - vertical_inset * 2) };
+}
+
+QRect WindowScene::page_view_rect() const
+{
+    auto top = std::min(chrome_toolbar_height, height());
     return { 0, top, width(), std::max(0, height() - top) };
+}
+
+void WindowScene::update_background_color()
+{
+    // Keep these canvas colors aligned with --photon-color-canvas in styles.css.
+    auto color = m_browser.preferred_color_scheme() == Web::CSS::PreferredColorScheme::Dark
+        ? QColor("#1e2023")
+        : QColor("#f4f5f6");
+    auto scene_palette = palette();
+    scene_palette.setColor(QPalette::Window, color);
+    setPalette(scene_palette);
+    update();
+}
+
+void WindowScene::update_page_geometry()
+{
+    m_active_page_view->setGeometry(page_view_rect());
+}
+
+bool WindowScene::page_contains(QPoint point) const
+{
+    if (!page_rect().contains(point))
+        return false;
+
+    QPainterPath page;
+    auto visible_rect = QRectF(page_rect().translated(-m_active_page_view->geometry().topLeft()));
+    page.addRoundedRect(visible_rect, page_corner_radius, page_corner_radius);
+    return page.contains(m_active_page_view->mapFrom(this, point));
 }
 
 bool WindowScene::chrome_owns_point(QPoint point) const
@@ -164,7 +213,7 @@ bool WindowScene::chrome_owns_point(QPoint point) const
         return true;
     if (has_open_overlays())
         return true;
-    if (point.y() < chrome_toolbar_height)
+    if (!page_contains(point))
         return true;
     return false;
 }
@@ -269,6 +318,22 @@ bool WindowScene::eventFilter(QObject* watched, QEvent* event)
             application.set_active_view(m_chrome->view());
         else if (watched == m_active_page_view)
             application.set_active_view(*m_active_page_view);
+    }
+
+    if (watched == m_active_page_view) {
+        QPoint point;
+        if (auto* mouse = dynamic_cast<QMouseEvent*>(event))
+            point = m_active_page_view->mapTo(this, mouse->position().toPoint());
+        else if (auto* wheel = dynamic_cast<QWheelEvent*>(event))
+            point = m_active_page_view->mapTo(this, wheel->position().toPoint());
+        else
+            point = { -1, -1 };
+
+        if ((event->type() == QEvent::MouseMove || event->type() == QEvent::MouseButtonPress
+                || event->type() == QEvent::MouseButtonRelease || event->type() == QEvent::MouseButtonDblClick
+                || event->type() == QEvent::Wheel)
+            && !page_contains(point))
+            return true;
     }
 
     // Qt can deliver directly to the page child even while the transparent

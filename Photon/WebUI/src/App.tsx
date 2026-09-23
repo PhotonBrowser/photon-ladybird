@@ -132,6 +132,7 @@ export default function App({ api }: AppProps): React.JSX.Element {
                     snapshot={snapshot}
                 />
             </div>
+            {activeTab && !activeTab.internalPage ? <div aria-hidden="true" className="photon-page-frame" /> : null}
             {activeOverlay && (
                 <button
                     aria-label="Close overlay"
