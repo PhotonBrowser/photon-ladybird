@@ -65,6 +65,11 @@ pub fn run(repository: &Path) -> Result<i32> {
         blocking_problems += check_tool(label, program, &["--version"], None);
     }
 
+    ui::section("Web UI");
+    blocking_problems += check_tool("Node", "node", &["--version"], None);
+    blocking_problems += check_tool("npm", "npm", &["--version"], None);
+    blocking_problems += check_webui_dependencies(repository);
+
     ui::section("Photon project");
     if repository.join("Meta/ladybird.py").is_file() {
         ui::ok("Ladybird tools", "found");
@@ -172,6 +177,28 @@ fn check_qt_quick() -> i32 {
         return 1;
     }
     ui::ok("Qt Quick", String::from_utf8_lossy(&output.stdout).trim());
+    0
+}
+
+fn check_webui_dependencies(repository: &Path) -> i32 {
+    let web_ui = repository.join("Photon/WebUI");
+    if web_ui.join("node_modules").is_dir() {
+        ui::ok("Web UI deps", "Photon/WebUI/node_modules");
+        return check_webui_bundle(&web_ui);
+    }
+    ui::fail(
+        "Web UI deps",
+        "not installed (run `./photon build` or `npm install` in Photon/WebUI)",
+    );
+    1
+}
+
+fn check_webui_bundle(web_ui: &Path) -> i32 {
+    if web_ui.join("dist/index.html").is_file() {
+        ui::ok("Web UI bundle", "Photon/WebUI/dist/index.html");
+    } else {
+        ui::note("Web UI bundle", "not built yet (`./photon build` runs `npm run build`)");
+    }
     0
 }
 

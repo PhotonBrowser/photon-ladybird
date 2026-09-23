@@ -28,15 +28,11 @@ Sync with upstream through the CLI:
 
 ```bash
 ./photon sync --fetch-only   # fetch and report the divergence, change nothing
-./photon sync                # fetch, then merge the upstream tracking branch
-./photon sync --record       # merge, verify the patch series, record the new base
+./photon sync                # fetch, verify, and merge the upstream tracking branch
+./photon sync --record       # merge (if needed), record the new base, materialize patches
 ```
 
-`sync` refuses to run with a dirty working tree or a detached HEAD, never
-rewrites history, never auto-resolves conflicts, and never pushes. A merge
-conflict stops the command for manual resolution. `--record` rewrites only
-the `revision` line in `Meta/Photon/upstream.toml`, and only after the patch
-series is verified against the merged base.
+`sync` refuses to run with Photon source changes, staged changes, or a detached HEAD. It accepts the exact registered Ladybird patch materialization and temporarily removes it for the merge. It verifies the patch series against the fetched target and merged checkout. A plain `sync` leaves the series unapplied and requires `sync --record` before building; `--record` advances only the `revision` line in `Meta/Photon/upstream.toml` and materializes the verified patches against that base. Sync never rewrites history, auto-resolves conflicts, or pushes. A merge conflict stops the command for manual resolution.
 
 To update, begin from a clean topic branch, fetch `upstream`, and rebase or merge according to the repository's policy. Resolve conflicts manually, rebuild, run the focused tests, and update the recorded revision only after the result is verified. Refresh any affected files in `Patches/ladybird` so the series applies to the new base.
 

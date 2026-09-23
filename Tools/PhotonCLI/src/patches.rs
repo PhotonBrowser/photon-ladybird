@@ -10,6 +10,7 @@ use crate::ui;
 
 pub fn status(repository: &Path) -> Result<i32> {
     let patches = series(repository)?;
+    let upstream = metadata::read_upstream(&repository.join("Meta/Photon/upstream.toml"))?;
     if patches.is_empty() {
         ui::header("Photon", Some("Patches"));
         ui::note("Series", "empty");
@@ -50,11 +51,12 @@ pub fn status(repository: &Path) -> Result<i32> {
         .into_iter()
         .filter(|path| is_ladybird_path(path) && !owned_paths.contains(path))
         .collect::<Vec<_>>();
-    if direct.is_empty() {
+    let committed = committed_ladybird_paths(repository, &upstream.revision)?;
+    if direct.is_empty() && committed.is_empty() {
         ui::ok("Direct Ladybird edits", "none outside registered patch paths");
     } else {
         ui::failure("Unrepresented direct Ladybird edits");
-        for path in direct {
+        for path in direct.into_iter().chain(committed) {
             println!("  {}", path.display());
         }
         return Ok(1);
@@ -96,11 +98,13 @@ pub fn check(repository: &Path) -> Result<i32> {
         .into_iter()
         .filter(|path| is_ladybird_path(path) && !owned_paths.contains(path))
         .collect::<Vec<_>>();
-    if !direct.is_empty() {
+    let committed = committed_ladybird_paths(repository, &upstream.revision)?;
+    if !direct.is_empty() || !committed.is_empty() {
         bail!(
-            "unrepresented direct modifications to upstream Ladybird files:\n{}",
+            "unrepresented modifications to upstream Ladybird files since the recorded base:\n{}",
             direct
                 .iter()
+                .chain(committed.iter())
                 .map(|path| format!("  {}", path.display()))
                 .collect::<Vec<_>>()
                 .join("\n")
@@ -145,6 +149,9 @@ fn verify_materialized_files(repository: &Path, patches: &[Patch]) -> Result<()>
 /// A pristine base is patched in order; partial or divergent states are never overwritten.
 pub fn ensure_materialized(repository: &Path) -> Result<()> {
     let patches = series(repository)?;
+    let upstream = metadata::read_upstream(&repository.join("Meta/Photon/upstream.toml"))?;
+    validate_recorded_base(repository, &upstream.revision)
+        .context("run `./photon sync --record` to advance the base before building")?;
     let applied = patches
         .iter()
         .map(|patch| patch_is_applied(repository, patch))
@@ -171,6 +178,20 @@ pub fn ensure_materialized(repository: &Path) -> Result<()> {
     if applied.iter().any(|state| *state) {
         bail!("patch series is only partially materialized; run `./photon patches status` and resolve it manually");
     }
+    let unexpected = changed_paths(repository)?
+        .into_iter()
+        .filter(|path| is_ladybird_path(path))
+        .collect::<Vec<_>>();
+    if !unexpected.is_empty() {
+        bail!(
+            "Ladybird files have unrepresented working-tree changes; resolve them before materializing patches:\n{}",
+            unexpected
+                .iter()
+                .map(|path| format!("  {}", path.display()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
     for patch in &patches {
         let path = patch_path(repository, patch)?;
         successful(
@@ -188,6 +209,85 @@ pub fn ensure_materialized(repository: &Path) -> Result<()> {
                 .arg(patch_path(repository, patch)?)
                 .current_dir(repository),
             &format!("materialize patch {}", patch.id),
+        )?;
+    }
+    verify_materialized_files(repository, &patches)
+}
+
+pub(crate) fn validate_recorded_base(repository: &Path, revision: &str) -> Result<()> {
+    let changed = committed_ladybird_paths(repository, revision)?;
+    if !changed.is_empty() {
+        bail!(
+            "Ladybird files differ from the recorded upstream base {revision}:\n{}",
+            changed
+                .iter()
+                .map(|path| format!("  {}", path.display()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+    Ok(())
+}
+
+/// Allow sync to proceed when the only working-tree changes are the exact
+/// registered Ladybird patch materialization. Photon source changes and staged
+/// changes still require the contributor to commit or stash them first.
+pub(crate) fn validate_sync_worktree(repository: &Path) -> Result<bool> {
+    let staged = Command::new("git")
+        .args(["diff", "--cached", "--quiet"])
+        .current_dir(repository)
+        .status()?;
+    if !staged.success() {
+        bail!("staged changes are present; commit or stash them before syncing");
+    }
+
+    let patches = series(repository)?;
+    let applied = patches
+        .iter()
+        .map(|patch| patch_is_applied(repository, patch))
+        .collect::<Result<Vec<_>>>()?;
+    if applied.iter().any(|state| *state) && applied.iter().any(|state| !*state) {
+        bail!("patch series is only partially materialized; resolve it manually before syncing");
+    }
+    if !applied.iter().all(|state| *state) {
+        if changed_paths(repository)?.is_empty() {
+            return Ok(false);
+        }
+        bail!("working tree is not clean; commit or stash your work before syncing");
+    }
+
+    verify_materialized_files(repository, &patches)?;
+    let owned_paths = patch_paths(repository, &patches)?;
+    let unexpected = changed_paths(repository)?
+        .into_iter()
+        .filter(|path| !is_ladybird_path(path) || !owned_paths.contains(path))
+        .collect::<Vec<_>>();
+    if !unexpected.is_empty() {
+        bail!(
+            "working tree has changes outside the registered patch materialization:\n{}",
+            unexpected
+                .iter()
+                .map(|path| format!("  {}", path.display()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+    Ok(true)
+}
+
+/// Remove an already verified patch materialization so Git can merge pristine
+/// upstream files. Patches are reversed in the opposite order from the series.
+pub(crate) fn unmaterialize_for_sync(repository: &Path) -> Result<()> {
+    if !validate_sync_worktree(repository)? {
+        return Ok(());
+    }
+    for patch in series(repository)?.iter().rev() {
+        successful(
+            Command::new("git")
+                .args(["apply", "--reverse"])
+                .arg(patch_path(repository, patch)?)
+                .current_dir(repository),
+            &format!("remove patch {} before upstream merge", patch.id),
         )?;
     }
     Ok(())
@@ -238,12 +338,29 @@ fn changed_paths(repository: &Path) -> Result<Vec<PathBuf>> {
         .collect())
 }
 
+fn committed_ladybird_paths(repository: &Path, revision: &str) -> Result<Vec<PathBuf>> {
+    let output = Command::new("git")
+        .args(["diff", "--name-only", "--no-renames", revision, "HEAD"])
+        .current_dir(repository)
+        .output()?;
+    if !output.status.success() {
+        bail!("failed to compare HEAD with recorded Ladybird base {revision}");
+    }
+    let owned_paths = patch_paths(repository, &series(repository)?)?;
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(PathBuf::from)
+        .filter(|path| is_ladybird_path(path) && !owned_paths.contains(path))
+        .collect())
+}
+
 fn is_ladybird_path(path: &Path) -> bool {
     !path.starts_with("Photon")
         && !path.starts_with("Tools/PhotonCLI")
         && !path.starts_with("Documentation/Photon")
         && !path.starts_with("Meta/Photon")
         && !path.starts_with("Patches")
+        && path != Path::new(".gitignore")
         && path != Path::new("photon")
         && path != Path::new("agents.md")
         && path != Path::new("AGENTS.md")

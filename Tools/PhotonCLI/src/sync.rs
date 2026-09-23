@@ -28,10 +28,7 @@ pub fn run(repository: &Path, fetch_only: bool, record: bool, no_fetch: bool) ->
         bail!("not on a branch; check out a topic branch before syncing");
     }
 
-    let dirty = upstream::git(repository, &["status", "--porcelain"])?;
-    if !dirty.is_empty() {
-        bail!("working tree is not clean; commit or stash your work before syncing:\n{dirty}");
-    }
+    let patches_materialized = patches::validate_sync_worktree(repository)?;
 
     ui::header("Photon", Some("Sync upstream"));
     ui::kv("Branch", branch);
@@ -53,7 +50,7 @@ pub fn run(repository: &Path, fetch_only: bool, record: bool, no_fetch: bool) ->
 
     let (target_ref, target_sha) = resolve_target(repository)?;
     ui::kv("Upstream", format!("{} ({target_ref})", ui::sha(&target_sha)));
-    check_series_on_target(repository, &target_sha)?;
+    check_series_on_revision(repository, &target_sha)?;
 
     if is_ancestor(repository, &target_sha, "HEAD")? {
         ui::success(format!("Already in sync with {target_ref}."));
@@ -73,6 +70,9 @@ pub fn run(repository: &Path, fetch_only: bool, record: bool, no_fetch: bool) ->
     }
 
     ui::step(format!("Merging {target_ref} (history is never rewritten)..."));
+    if patches_materialized {
+        patches::unmaterialize_for_sync(repository)?;
+    }
     let merged = Command::new("git")
         .args(["merge", "--no-edit", &target_ref])
         .current_dir(repository)
@@ -88,21 +88,27 @@ pub fn run(repository: &Path, fetch_only: bool, record: bool, no_fetch: bool) ->
     let head = upstream::git(repository, &["rev-parse", "HEAD"])?;
     ui::ok("Merged", ui::sha(&head));
 
+    check_series_on_revision(repository, &head).context("Photon patch series does not apply to the merged checkout")?;
+
     if record {
         return record_revision(repository, &recorded.revision, &target_sha);
     }
 
     println!();
-    ui::hint("Next: `./photon patches check`, rebuild, run the focused tests,");
-    ui::hint("then record the new base with `photon sync --record` once verified.");
+    ui::hint("The upstream merge is complete and the verified patch series is unapplied.");
+    ui::hint("Run `./photon sync --record` to record the new base and prepare the build.");
     Ok(0)
 }
 
 fn record_revision(repository: &Path, recorded: &str, target_sha: &str) -> Result<i32> {
+    patches::validate_recorded_base(repository, target_sha)?;
     if recorded == target_sha {
         ui::kv("Recorded base", format!("{} (already current)", ui::sha(target_sha)));
+        patches::ensure_materialized(repository)?;
         return Ok(0);
     }
+
+    patches::unmaterialize_for_sync(repository)?;
 
     let path = repository.join(UPSTREAM_TOML);
     let source = fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
@@ -110,19 +116,21 @@ fn record_revision(repository: &Path, recorded: &str, target_sha: &str) -> Resul
     fs::write(&path, updated).with_context(|| format!("failed to update {}", path.display()))?;
 
     ui::ok("Recorded base", format!("{} in {UPSTREAM_TOML}", ui::sha(target_sha)));
+    patches::ensure_materialized(repository)?;
     Ok(0)
 }
 
-fn check_series_on_target(repository: &Path, target_sha: &str) -> Result<()> {
+fn check_series_on_revision(repository: &Path, revision: &str) -> Result<()> {
     let series = patches::series(repository)?;
     let temporary = std::env::temp_dir().join(format!("photon-sync-{}", std::process::id()));
     if temporary.exists() {
         fs::remove_dir_all(&temporary)?;
     }
     fs::create_dir(&temporary)?;
-    let checked = patches::check_in(repository, &temporary, target_sha, &series);
+    let checked = patches::check_in(repository, &temporary, revision, &series);
     fs::remove_dir_all(&temporary).context("failed to remove temporary patch checkout")?;
-    checked.context("Photon patch series does not apply to the fetched upstream target; resolve and update the patches before syncing")
+    checked
+        .context("Photon patch series does not apply to this revision; resolve and update the patches before syncing")
 }
 
 fn with_updated_revision(source: &str, revision: &str) -> Result<String> {

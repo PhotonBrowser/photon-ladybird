@@ -132,6 +132,10 @@ struct RunArgs {
     /// Select the React/TypeScript frontend (default) or the deprecated QML fallback.
     #[arg(long, value_parser = ["qml", "web"])]
     ui: Option<String>,
+    /// Start the Vite dev server and run Photon against it for live frontend changes.
+    /// `photon run dev` remains accepted as a shorthand for this flag.
+    #[arg(long)]
+    dev: bool,
     /// Launch the existing executable without building it first
     #[arg(long)]
     no_build: bool,
@@ -169,12 +173,12 @@ fn run() -> Result<i32> {
     match cli.command {
         Command::Build(args) => build::build(&repository, preset(args.debug), args.verbose, Some("Photon")),
         Command::Run(args) => {
-            let is_dev = args.application_args.first().is_some_and(|argument| argument == "dev");
-            if is_dev {
+            let (dev_mode, forwarded_args) = split_dev_args(args.dev, &args.application_args);
+            if dev_mode {
                 if args.ui.as_deref() == Some("qml") {
-                    anyhow::bail!("`./photon run dev` requires the React Web UI; remove `--ui qml`");
+                    anyhow::bail!("Dev mode requires the React Web UI; remove `--ui qml`");
                 }
-                return build::run_dev(&repository, args.no_build, args.verbose, &args.application_args[1..]);
+                return build::run_dev(&repository, args.no_build, args.verbose, forwarded_args);
             }
             if args.ui.as_deref() == Some("qml") {
                 eprintln!(
@@ -220,6 +224,18 @@ fn preset(debug: bool) -> &'static str {
     if debug { "Debug" } else { "Release" }
 }
 
+/// Resolve dev mode from `--dev` or the `dev` shorthand (`photon run dev`).
+/// Returns whether dev mode is active and the remaining application arguments.
+fn split_dev_args(dev_flag: bool, application_args: &[OsString]) -> (bool, &[OsString]) {
+    if dev_flag {
+        return (true, application_args);
+    }
+    if application_args.first().is_some_and(|argument| argument == "dev") {
+        return (true, &application_args[1..]);
+    }
+    (false, application_args)
+}
+
 fn repository_root() -> Result<PathBuf> {
     if let Some(root) = env::var_os("PHOTON_ROOT") {
         return Ok(PathBuf::from(root));
@@ -249,5 +265,29 @@ mod tests {
     #[test]
     fn release_is_the_default_preset() {
         assert_eq!(preset(false), "Release");
+    }
+
+    #[test]
+    fn dev_flag_enables_dev_mode_without_consuming_arguments() {
+        let args = vec![OsString::from("--help")];
+        let (dev_mode, forwarded) = split_dev_args(true, &args);
+        assert!(dev_mode);
+        assert_eq!(forwarded, args.as_slice());
+    }
+
+    #[test]
+    fn positional_dev_shorthand_is_stripped_from_application_args() {
+        let args = vec![OsString::from("dev"), OsString::from("https://example.com")];
+        let (dev_mode, forwarded) = split_dev_args(false, &args);
+        assert!(dev_mode);
+        assert_eq!(forwarded, &[OsString::from("https://example.com")]);
+    }
+
+    #[test]
+    fn ordinary_application_args_do_not_enable_dev_mode() {
+        let args = vec![OsString::from("https://example.com")];
+        let (dev_mode, forwarded) = split_dev_args(false, &args);
+        assert!(!dev_mode);
+        assert_eq!(forwarded, args.as_slice());
     }
 }

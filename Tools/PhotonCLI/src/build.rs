@@ -16,6 +16,11 @@ use crate::ui;
 
 pub fn build(repository: &Path, preset: &str, verbose: bool, target: Option<&str>) -> Result<i32> {
     crate::patches::ensure_materialized(repository)?;
+    ensure_webui_production_build(repository)?;
+    build_native(repository, preset, verbose, target)
+}
+
+fn build_native(repository: &Path, preset: &str, verbose: bool, target: Option<&str>) -> Result<i32> {
     let mut command = ladybird_command(repository);
     command.args(["build", "--preset", preset]);
     if let Some(target) = target {
@@ -42,6 +47,9 @@ pub fn run(
         ui::step("Starting Photon...");
     } else {
         ui::header("Photon", Some("Run · Release · Qt"));
+        if webui_bundle_is_stale(repository).unwrap_or(false) {
+            ui::hint("Web UI bundle is stale; omit `--no-build` so `./photon run` rebuilds the Vite app.");
+        }
         ui::step("Starting Photon without building...");
     }
 
@@ -56,12 +64,15 @@ pub fn run(
 
 pub fn run_dev(repository: &Path, no_build: bool, verbose: bool, application_args: &[OsString]) -> Result<i32> {
     crate::patches::ensure_materialized(repository)?;
+    // Dev mode serves the frontend from Vite, so only the native binary is
+    // built here. The production bundle is built by plain `./photon run`.
+    ensure_webui_dependencies(repository)?;
     if photon_binary_needs_build(repository)? {
         if no_build {
             bail!("Photon must be built for dev mode; run `./photon build` first or omit `--no-build`");
         }
         ui::step("Building Photon once for the dev session...");
-        let code = build(repository, "Release", verbose, Some("Photon"))?;
+        let code = build_native(repository, "Release", verbose, Some("Photon"))?;
         if code != 0 {
             return Ok(code);
         }
@@ -88,6 +99,123 @@ pub fn run_dev(repository: &Path, no_build: bool, verbose: bool, application_arg
     let result = run_inherited(&mut command);
     crate::process::stop_background(&mut vite)?;
     result
+}
+
+fn webui_directory(repository: &Path) -> PathBuf {
+    repository.join("Photon/WebUI")
+}
+
+/// Build the Vite production bundle so plain `./photon run` renders the
+/// bundled chrome without a dev server. Skipped only when the bundle is
+/// already newer than every WebUI source file.
+pub fn ensure_webui_production_build(repository: &Path) -> Result<()> {
+    ensure_webui_dependencies(repository)?;
+    if !webui_bundle_is_stale(repository)? {
+        return Ok(());
+    }
+    let web_ui_directory = webui_directory(repository);
+    ui::step("Building Photon Web UI (Vite production bundle)...");
+    let mut command = Command::new("npm");
+    command.args(["run", "build"]).current_dir(&web_ui_directory);
+    let code = crate::process::run_inherited(&mut command).context("failed to run `npm run build` in Photon/WebUI")?;
+    if code != 0 {
+        bail!("`npm run build` in Photon/WebUI failed with exit code {code}");
+    }
+    ui::ok("Web UI ready", "Photon/WebUI/dist/index.html");
+    Ok(())
+}
+
+/// Ensure `node_modules` exists so Vite build/dev commands can run.
+/// Runs `npm ci` when a lockfile is present, otherwise `npm install`.
+fn ensure_webui_dependencies(repository: &Path) -> Result<()> {
+    let web_ui_directory = webui_directory(repository);
+    let node_modules = web_ui_directory.join("node_modules");
+    if !needs_npm_install(&web_ui_directory, &node_modules)? {
+        return Ok(());
+    }
+    ui::step("Installing Photon Web UI dependencies...");
+    let mut command = Command::new("npm");
+    if web_ui_directory.join("package-lock.json").is_file() {
+        command.args(["ci"]);
+    } else {
+        command.args(["install"]);
+    }
+    command.current_dir(&web_ui_directory);
+    let code = crate::process::run_inherited(&mut command)
+        .context("failed to install Photon/WebUI dependencies; run `npm install` in Photon/WebUI manually")?;
+    if code != 0 {
+        bail!("Web UI dependency install failed with exit code {code}");
+    }
+    Ok(())
+}
+
+fn needs_npm_install(web_ui_directory: &Path, node_modules: &Path) -> Result<bool> {
+    if !node_modules.is_dir() {
+        return Ok(true);
+    }
+    let node_modules_modified = fs::metadata(node_modules)
+        .with_context(|| format!("failed to read {} timestamp", node_modules.display()))?
+        .modified()?;
+    for manifest in ["package.json", "package-lock.json"] {
+        let path = web_ui_directory.join(manifest);
+        if path.is_file() && fs::metadata(&path)?.modified()? > node_modules_modified {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// True when `dist/index.html` is missing or older than any WebUI source,
+/// manifest, or Vite/TS configuration file.
+fn webui_bundle_is_stale(repository: &Path) -> Result<bool> {
+    let web_ui_directory = webui_directory(repository);
+    let bundle = web_ui_directory.join("dist/index.html");
+    let Ok(bundle_metadata) = fs::metadata(&bundle) else {
+        return Ok(true);
+    };
+    let built_at = bundle_metadata
+        .modified()
+        .with_context(|| format!("failed to read {} timestamp", bundle.display()))?;
+    Ok(webui_source_is_newer_than(&web_ui_directory, built_at)?
+        || webui_source_is_newer_than(&web_ui_directory.join("src"), built_at)?)
+}
+
+fn webui_source_is_newer_than(directory: &Path, built_at: SystemTime) -> Result<bool> {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return Ok(false);
+    };
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        let metadata = entry.metadata()?;
+        if metadata.is_dir() {
+            if entry.file_name() == "node_modules" || entry.file_name() == "dist" {
+                continue;
+            }
+            if webui_source_is_newer_than(&path, built_at)? {
+                return Ok(true);
+            }
+            continue;
+        }
+        let watched = matches!(
+            path.extension().and_then(|extension| extension.to_str()),
+            Some("html" | "ts" | "tsx" | "js" | "jsx" | "css" | "json" | "svg")
+        ) || matches!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some(
+                "package.json"
+                    | "package-lock.json"
+                    | "vite.config.ts"
+                    | "tsconfig.json"
+                    | "tsconfig.app.json"
+                    | "tsconfig.node.json"
+            )
+        );
+        if watched && metadata.modified()? > built_at {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn wait_for_vite(vite: &mut std::process::Child) -> Result<()> {
@@ -246,6 +374,7 @@ fn new_log_path(repository: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn log_path_uses_the_required_directory_and_prefix() {
@@ -260,5 +389,30 @@ mod tests {
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name.starts_with("photon-"))
         );
+    }
+
+    #[test]
+    fn missing_bundle_counts_as_stale() {
+        let root = Path::new("/definitely/not/a/photon/checkout");
+        assert!(webui_bundle_is_stale(root).expect("missing bundle should report stale"));
+    }
+
+    #[test]
+    fn newer_source_counts_as_stale() {
+        let directory = std::env::temp_dir().join(format!("photon-webui-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).expect("test directory should be created");
+        let source = directory.join("probe.tsx");
+        fs::write(&source, "export default 1;").expect("test source should be written");
+        let older = SystemTime::now() - Duration::from_secs(5);
+        assert!(webui_source_is_newer_than(&directory, older).expect("newer source should be stale"));
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn missing_node_modules_requires_install() {
+        let web_ui = Path::new("/definitely/not/a/photon/WebUI");
+        let node_modules = web_ui.join("node_modules");
+        assert!(needs_npm_install(web_ui, &node_modules).expect("missing node_modules needs install"));
     }
 }
