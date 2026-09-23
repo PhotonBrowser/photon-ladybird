@@ -9,11 +9,11 @@ From the repository root:
 ./photon run --dev # or `./photon run dev`: Vite hot reload for the React chrome
 ```
 
-`./photon` delegates configuration and compilation to `Meta/ladybird.py`, using the Qt frontend and the normal Ladybird vcpkg/build environment. The first Ladybird dependency bootstrap can be expensive. Later builds target only `photon` and are incremental.
+`./photon` delegates configuration and compilation to `Meta/ladybird.py`, using the Qt frontend and the normal Ladybird vcpkg/build environment. Builds run from `Build/Source`, a link to a generated Git worktree containing the recorded Ladybird revision and the Photon patch series. If `.photon/worktree` exists, build, run, and test use its linked edit worktree instead. The canonical Ladybird files stay pristine. Actual worktrees live beside the checkout so Cargo sees the correct workspace. Generated trees use separate persistent build directories in the sibling `.<checkout>-photon-build/` directory; these keep CMake caches tied to the source tree that created them and remain after generated source is removed.
 
-Before building or running, the CLI verifies and materializes `Patches/series.toml` over the recorded upstream base as needed. It refuses to build when committed Ladybird files differ from the recorded base or when patches are partial or divergent. Run `./photon sync` to merge upstream, record the verified base, and materialize its patch series. See [Patches.md](Patches.md) for the patch checks and sync behavior.
+Before building or running, the CLI verifies the recorded upstream base and creates or validates the generated engine tree. It refuses to use a stale or edited generated build tree. Run `./photon sync` to merge upstream and verify the series against the new base. See [Patches.md](Patches.md) for the engine edit and patch capture workflow.
 
-Use `./photon run --no-build` to launch an existing binary. `./photon clean` removes the Photon executable and Photon-specific generated CMake output for the selected preset; it preserves vcpkg and shared Cargo artifacts.
+Use `./photon run --no-build` to launch an existing binary. `./photon clean` removes the Photon executable and Photon-specific generated CMake output for the selected preset; it preserves vcpkg and shared Cargo artifacts. `./photon engine clean` removes generated engine source trees while preserving build artifacts.
 
 The default preset is `Release`. Use `./photon build --debug` for a Debug build.
 

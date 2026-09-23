@@ -105,20 +105,21 @@ When changing routing, verify toolbar controls and address submission, overlay/s
 
 ## Ladybird patch invariant and workflow
 
-**DO NOT DIRECTLY MODIFY LADYBIRD SOURCE.** This applies even to small changes and even when a source checkout is materialized for building. The authoritative representation is the patch, not the materialized source edit.
+**DO NOT DIRECTLY MODIFY CANONICAL LADYBIRD SOURCE.** The authoritative representation is the patch series. Engine edits are accessible at `.photon/worktree` after `./photon engine edit`; generated build source is accessible at `Build/Source`. Both paths link to Git worktrees beside the checkout so Cargo resolves each worktree's own workspace. Each tree has a separate persistent build directory beside the checkout so CMake caches stay tied to their source roots.
 
 - Forbidden: an intentional Ladybird change that exists only as a direct edit with no registered patch.
-- Allowed: a Ladybird checkout file changed solely because a registered patch has been materialized. That file is a build input; the registered patch remains the authoritative change.
+- Allowed: generated engine worktrees linked at `Build/Source` and `.photon/worktree`; these are not the canonical Git worktree and must never be committed.
 
 The invariant is:
 
 ```text
-recorded pristine Ladybird upstream
-    + ordered registered Photon patch series
-    = Ladybird source used to build Photon
+canonical Ladybird source = recorded pristine upstream
+
+Build/Source or .photon/worktree
+    = recorded pristine upstream + ordered registered Photon patch series
 ```
 
-`./photon patches check` must enforce that invariant against `Meta/Photon/upstream.toml`, including a clean application of the complete ordered series and exact equality of materialized Ladybird files. It must fail on any unrepresented direct or committed Ladybird modification. Build/run materialization must stop rather than overwrite a partial, divergent, or unrepresented Ladybird edit.
+`./photon patches check` must enforce that invariant against `Meta/Photon/upstream.toml`, including a clean application of the complete ordered series and exact equality of generated build sources. It must fail on any unrepresented direct or committed canonical Ladybird modification. Generated build trees must stop rather than overwrite unexpected edits.
 
 When an engine change is necessary:
 
@@ -129,18 +130,18 @@ Photon-owned solution?
         |
        no
         v
-create/update Patches/ladybird/NNNN-*.patch
+./photon engine edit
         |
-register in Patches/series.toml
+edit .photon/worktree
         |
-materialize with the Photon patch workflow
+./photon patches capture "description" --area Area
         |
 run ./photon patches status and ./photon patches check
         |
 build/test
 ```
 
-Prefer the smallest generic Ladybird change; never add Photon product policy or names to engine code. Do not create patches for Photon-owned files. Never leave an intentional engine change only in the checkout or tell a future agent to patch it later. Do not silently move the recorded base. Use `./photon upstream status` to inspect tracking, `./photon sync --fetch-only` to preview, and `./photon sync` to complete an upstream sync, record the verified base, and materialize the series. If a patch needs refreshing, edit only `Patches/` and rerun `./photon sync`; no temporary commit is needed. Sync refuses staged changes or unrelated work and does not resolve Git conflicts automatically.
+Prefer the smallest generic Ladybird change; never add Photon product policy or names to engine code. Do not create patches for Photon-owned files. Never leave an intentional engine change only in the edit worktree or tell a future agent to patch it later. Do not silently move the recorded base. Use `./photon upstream status` to inspect tracking, `./photon sync --fetch-only` to preview, and `./photon sync` to complete an upstream sync, record the verified base, and recreate generated engine trees. `./photon engine clean` removes exact generated worktrees but refuses to discard edits. If a patch needs refreshing after sync, edit only `Patches/` and rerun `./photon sync`; no temporary commit is needed. Sync refuses staged changes or unrelated work and does not resolve Git conflicts automatically.
 
 `Patches/series.toml` is the current patch list. Do not duplicate a hard-coded list here; document semantics and invariants instead.
 
