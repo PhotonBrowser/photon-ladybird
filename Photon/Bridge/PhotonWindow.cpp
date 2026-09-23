@@ -26,6 +26,9 @@
 
 namespace Photon {
 
+template<typename>
+constexpr bool is_unhandled_command = false;
+
 Window::Window(QWidget* parent)
     : QWidget(parent)
     , m_browser(std::make_unique<BrowserView>(*this))
@@ -169,7 +172,8 @@ void Window::dispatch_command(PhotonCommand const& command)
                     windowHandle()->startSystemMove();
                 break;
             }
-        }
+        } else
+            static_assert(is_unhandled_command<Command>, "PhotonCommand is missing a dispatcher branch");
     }, command);
 }
 
