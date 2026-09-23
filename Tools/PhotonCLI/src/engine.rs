@@ -45,6 +45,7 @@ pub fn clean(repository: &Path) -> Result<i32> {
             continue;
         }
         verify_tree(repository, &tree)?;
+        park_build_directory(repository, &tree)?;
         let tree_argument = path_arg(&tree, repository)?;
         git_success(
             repository,
@@ -54,7 +55,10 @@ pub fn clean(repository: &Path) -> Result<i32> {
         remove_alias_if_dangling(&alias)?;
     }
     ui::header("Photon", Some("Engine clean"));
-    ui::ok("Generated source", "removed; build artifacts remain in Build/");
+    ui::ok(
+        "Generated source",
+        "removed; build artifacts parked beside the checkout",
+    );
     Ok(0)
 }
 
@@ -62,7 +66,7 @@ pub(crate) fn ensure_build_tree(repository: &Path) -> Result<PathBuf> {
     let editing = edit_tree(repository);
     if editing.exists() {
         verify_edit_tree(repository)?;
-        ensure_build_link(repository, &editing)?;
+        ensure_build_directory(repository, &editing)?;
         return Ok(editing);
     }
     let tree = build_tree(repository);
@@ -129,6 +133,7 @@ pub(crate) fn discard_build_tree(repository: &Path) -> Result<()> {
         return Ok(());
     }
     verify_tree(repository, &tree)?;
+    park_build_directory(repository, &tree)?;
     let tree_argument = path_arg(&tree, repository)?;
     git_success(
         repository,
@@ -149,7 +154,7 @@ fn ensure_tree(repository: &Path, tree: &Path, include_build_link: bool) -> Resu
             })?;
         }
         if include_build_link {
-            ensure_build_link(repository, tree)?;
+            ensure_build_directory(repository, tree)?;
         }
         ensure_alias(&alias, tree)?;
         return Ok(());
@@ -172,10 +177,10 @@ fn ensure_tree(repository: &Path, tree: &Path, include_build_link: bool) -> Resu
             "move generated source outside the canonical checkout",
         )?;
         if tree == build_tree(repository) {
-            ensure_build_link(repository, tree)?;
+            ensure_build_directory(repository, tree)?;
             verify_tree(repository, tree)?;
         } else if include_build_link {
-            ensure_build_link(repository, tree)?;
+            ensure_build_directory(repository, tree)?;
         }
         ensure_alias(&alias, tree)?;
         return Ok(());
@@ -183,7 +188,10 @@ fn ensure_tree(repository: &Path, tree: &Path, include_build_link: bool) -> Resu
     if fs::symlink_metadata(&alias).is_ok() {
         let target = fs::read_link(&alias)?;
         if target != tree {
-            bail!("{} already exists and does not point to the managed worktree", alias.display());
+            bail!(
+                "{} already exists and does not point to the managed worktree",
+                alias.display()
+            );
         }
         bail!("{} points to a missing generated worktree", alias.display());
     }
@@ -206,9 +214,7 @@ fn ensure_tree(repository: &Path, tree: &Path, include_build_link: bool) -> Resu
         fs::create_dir_all(tree.join("Meta"))?;
         link_dir(&repository.join("Meta/Photon"), &tree.join("Meta/Photon"))?;
         if include_build_link {
-            // Ladybird's presets put binaries under <source>/Build. Share the
-            // repository Build directory, including existing user artifacts.
-            ensure_build_link(repository, tree)?;
+            ensure_build_directory(repository, tree)?;
         }
 
         let patches = patches::series(repository)?;
@@ -235,32 +241,90 @@ fn ensure_tree(repository: &Path, tree: &Path, include_build_link: bool) -> Resu
     ensure_alias(&alias, tree)
 }
 
-fn ensure_build_link(repository: &Path, tree: &Path) -> Result<()> {
-    let build_root = persistent_build_root(repository);
-    let build_directory = build_root.join(if tree == build_tree(repository) {
-        "PhotonBuild"
-    } else {
-        "PhotonEdit"
-    });
-    fs::create_dir_all(&build_directory)?;
-    let link = tree.join("Build");
-    match fs::symlink_metadata(&link) {
+fn ensure_build_directory(repository: &Path, tree: &Path) -> Result<()> {
+    let persistent = persistent_build_directory(repository, tree)?;
+    let build = tree.join("Build");
+    match fs::symlink_metadata(&build) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
-            let current = fs::read_link(&link)?;
-            if current == build_directory {
-                return Ok(());
+            let target = fs::read_link(&build)?;
+            fs::remove_file(&build)?;
+            if target == persistent {
+                // The target already is the parked artifact directory.
+            } else if target.exists() {
+                if persistent.exists() {
+                    bail!(
+                        "both {} and {} contain build data",
+                        target.display(),
+                        persistent.display()
+                    );
+                }
+                if let Some(parent) = persistent.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::rename(target, &persistent)?;
             }
-            fs::remove_file(&link)?;
         }
-        Ok(_) => bail!("{} exists and is not the managed build-directory symlink", link.display()),
+        Ok(_) => return Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
-    link_dir(&build_directory, &link)
+    if persistent.exists() {
+        fs::rename(&persistent, &build)
+            .with_context(|| format!("failed to restore build directory from {}", persistent.display()))?;
+    } else {
+        fs::create_dir_all(&build)?;
+    }
+    Ok(())
+}
+
+fn park_build_directory(repository: &Path, tree: &Path) -> Result<()> {
+    let persistent = persistent_build_directory(repository, tree)?;
+    let build = tree.join("Build");
+    let metadata = match fs::symlink_metadata(&build) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if let Some(parent) = persistent.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if metadata.file_type().is_symlink() {
+        let target = fs::read_link(&build)?;
+        fs::remove_file(&build)?;
+        if target == persistent {
+            return Ok(());
+        }
+        if persistent.exists() {
+            bail!("cannot preserve build output: {} already exists", persistent.display());
+        }
+        if target.exists() {
+            fs::rename(target, &persistent)?;
+        }
+    } else {
+        if persistent.exists() {
+            bail!("cannot preserve build output: {} already exists", persistent.display());
+        }
+        fs::rename(&build, &persistent)?;
+    }
+    Ok(())
+}
+
+fn persistent_build_directory(repository: &Path, tree: &Path) -> Result<PathBuf> {
+    let name = if tree == build_tree(repository) {
+        "PhotonBuild"
+    } else if tree == edit_tree(repository) {
+        "PhotonEdit"
+    } else {
+        bail!("unknown generated engine tree {}", tree.display());
+    };
+    Ok(persistent_build_root(repository).join(name))
 }
 
 fn persistent_build_root(repository: &Path) -> PathBuf {
-    let name = repository.file_name().and_then(|name| name.to_str()).unwrap_or("photon");
+    let name = repository
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("photon");
     repository
         .parent()
         .unwrap_or(repository)
@@ -268,7 +332,10 @@ fn persistent_build_root(repository: &Path) -> PathBuf {
 }
 
 fn worktree_root(repository: &Path) -> PathBuf {
-    let name = repository.file_name().and_then(|name| name.to_str()).unwrap_or("photon");
+    let name = repository
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("photon");
     repository
         .parent()
         .unwrap_or(repository)
@@ -292,7 +359,12 @@ fn ensure_alias(alias: &Path, tree: &Path) -> Result<()> {
         if current == tree {
             return Ok(());
         }
-        bail!("{} points to {}, expected {}", alias.display(), current.display(), tree.display());
+        bail!(
+            "{} points to {}, expected {}",
+            alias.display(),
+            current.display(),
+            tree.display()
+        );
     }
     if let Some(parent) = alias.parent() {
         fs::create_dir_all(parent)?;
@@ -302,7 +374,9 @@ fn ensure_alias(alias: &Path, tree: &Path) -> Result<()> {
 
 fn remove_alias_if_dangling(alias: &Path) -> Result<()> {
     match fs::symlink_metadata(alias) {
-        Ok(metadata) if metadata.file_type().is_symlink() && !alias.exists() => fs::remove_file(alias).map_err(Into::into),
+        Ok(metadata) if metadata.file_type().is_symlink() && !alias.exists() => {
+            fs::remove_file(alias).map_err(Into::into)
+        }
         Ok(_) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),

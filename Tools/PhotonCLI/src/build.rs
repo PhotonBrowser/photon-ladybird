@@ -44,18 +44,23 @@ fn ensure_configured_for_source(source: &Path, preset: &str) -> Result<()> {
     let Ok(contents) = fs::read_to_string(&cache) else {
         return Ok(());
     };
-    let configured_source = contents.lines().find_map(|line| {
-        line.strip_prefix("CMAKE_HOME_DIRECTORY:INTERNAL=")
-    });
+    let configured_source = contents
+        .lines()
+        .find_map(|line| line.strip_prefix("CMAKE_HOME_DIRECTORY:INTERNAL="));
+    let configured_build = contents
+        .lines()
+        .find_map(|line| line.strip_prefix("CMAKE_CACHEFILE_DIR:INTERNAL="));
     let expected_source = source.canonicalize()?;
-    if configured_source.is_some_and(|configured| Path::new(configured) == expected_source) {
+    let expected_build = build_directory.canonicalize()?;
+    if configured_source.is_some_and(|configured| Path::new(configured) == expected_source)
+        && configured_build.is_some_and(|configured| Path::new(configured) == expected_build)
+    {
         return Ok(());
     }
     for marker in ["build.ninja", "ladybird.sln"] {
         let marker = build_directory.join(marker);
         if marker.exists() {
-            fs::remove_file(&marker)
-                .with_context(|| format!("failed to invalidate {}", marker.display()))?;
+            fs::remove_file(&marker).with_context(|| format!("failed to invalidate {}", marker.display()))?;
         }
     }
     remove_path(&cache)?;
@@ -116,7 +121,7 @@ pub fn run_dev(repository: &Path, no_build: bool, verbose: bool, application_arg
         return Err(error);
     }
     ui::ok("Vite ready", "http://127.0.0.1:5173 (frontend edits hot reload)");
-    let mut photon = match start_dev_photon(repository, application_args) {
+    let mut photon = match start_dev_photon(&source, application_args) {
         Ok(photon) => Some(photon),
         Err(error) => {
             crate::process::stop_background(&mut vite)?;
@@ -187,7 +192,7 @@ pub fn run_dev(repository: &Path, no_build: bool, verbose: bool, application_arg
         }
         vite = vite_result;
         if code == 0 {
-            photon = match start_dev_photon(repository, application_args) {
+            photon = match start_dev_photon(&source, application_args) {
                 Ok(photon) => Some(photon),
                 Err(error) => {
                     crate::process::stop_background(&mut vite)?;
@@ -210,8 +215,8 @@ fn start_vite(repository: &Path) -> Result<Child> {
         .context("failed to start Vite; run `npm install` in Photon/WebUI first")
 }
 
-fn start_dev_photon(repository: &Path, application_args: &[OsString]) -> Result<Child> {
-    let mut command = ladybird_command(repository);
+fn start_dev_photon(source: &Path, application_args: &[OsString]) -> Result<Child> {
+    let mut command = ladybird_command(source);
     command.args(["run", "--preset", "Release", "--no-build", "Photon"]);
     command.env("PHOTON_WEBUI_DEV_SERVER", "http://127.0.0.1:5173/");
     command.args(application_args);
@@ -369,10 +374,7 @@ fn vite_serves_photon(address: SocketAddr) -> bool {
     response.contains("200 OK") && response.contains("Photon Chrome") && response.contains("/@vite/client")
 }
 
-fn photon_binary_needs_build(
-    source: &Path,
-    sources: &HashMap<PathBuf, SourceFileState>,
-) -> Result<bool> {
+fn photon_binary_needs_build(source: &Path, sources: &HashMap<PathBuf, SourceFileState>) -> Result<bool> {
     let executable = if cfg!(windows) { "Photon.exe" } else { "Photon" };
     let binary = source.join("Build/release/bin").join(executable);
     let Ok(binary_metadata) = fs::metadata(&binary) else {
