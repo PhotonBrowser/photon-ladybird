@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-import { Minus, Plus, Square, X } from "lucide-react";
-import { Globe, LoaderCircle } from "lucide";
-import { MorphIcon } from "morphicons/react";
+import { Globe, LoaderCircle, Minus, Plus, Square, X } from "lucide-react";
 import { useRef, useState } from "react";
 
 import photonLogoMonotone from "../../assets/photon-logo-monotone.svg";
@@ -160,26 +158,17 @@ function focusAdjacentTab(event: React.KeyboardEvent<HTMLButtonElement>, api: Ph
 
 function WebTabIcon({ faviconUrl, loading }: { faviconUrl: string | null; loading: boolean }): React.JSX.Element {
     const [failed, setFailed] = useState(false);
-    const fallback = !faviconUrl || failed;
+    if (loading) return <LoaderCircle aria-hidden="true" className="photon-spinner" />;
+    if (!faviconUrl || failed) return <Globe aria-hidden="true" />;
+
     return (
-        <>
-            <MorphIcon
-                aria-hidden="true"
-                className="photon-icon photon-tab-morph-icon"
-                icon={loading ? LoaderCircle : fallback ? Globe : undefined}
-                reducedMotion="user"
-                spring="snappy"
-            />
-            {!fallback && (
-                <img
-                    alt=""
-                    className="photon-tab-favicon"
-                    height={14}
-                    src={faviconUrl}
-                    width={14}
-                    onError={() => setFailed(true)}
-                />
-            )}
-        </>
+        <img
+            alt=""
+            className="photon-tab-favicon"
+            height={14}
+            src={faviconUrl}
+            width={14}
+            onError={() => setFailed(true)}
+        />
     );
 }

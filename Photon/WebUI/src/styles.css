@@ -452,19 +452,6 @@ button {
     height: var(--photon-icon-size-sm);
 }
 
-.photon-tab-morph-icon {
-    width: var(--photon-icon-size-lg);
-    height: var(--photon-icon-size-lg);
-}
-
-.photon-tab-morph-icon {
-    position: absolute;
-}
-
-.photon-tab-favicon {
-    position: relative;
-}
-
 .photon-menu-item > .lucide,
 .photon-menu-toggle-icon {
     width: var(--photon-icon-size-md);
