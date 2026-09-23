@@ -2,17 +2,17 @@ diff --git a/Services/WebContent/ConnectionFromClient.cpp b/Services/WebContent/
 index 536c88931c..fbf8a7f901 100644
 --- a/Services/WebContent/ConnectionFromClient.cpp
 +++ b/Services/WebContent/ConnectionFromClient.cpp
-@@ -2815,6 +2815,12 @@ void ConnectionFromClient::set_preferred_motion(Web::PageId page_id, Web::CSS::P
+@@ -2815,6 +2815,12 @@ void ConnectionFromClient::set_preferred_motion(Compositing::PageId page_id, Web::CSS::P
          page->set_preferred_motion(motion);
  }
  
-+void ConnectionFromClient::set_transparent_background(Web::PageId page_id, bool transparent)
++void ConnectionFromClient::set_transparent_background(Compositing::PageId page_id, bool transparent)
 +{
 +    if (auto page = this->page(page_id); page.has_value())
 +        page->set_transparent_background(transparent);
 +}
 +
- void ConnectionFromClient::set_preferred_languages(Web::PageId, Vector<String> preferred_languages)
+ void ConnectionFromClient::set_preferred_languages(Compositing::PageId, Vector<String> preferred_languages)
  {
      // FIXME: Whenever the user agent needs to make the navigator.languages attribute of a Window or WorkerGlobalScope
 diff --git a/Services/WebContent/ConnectionFromClient.h b/Services/WebContent/ConnectionFromClient.h
@@ -20,13 +20,13 @@ index afd2804391..908b147a7f 100644
 --- a/Services/WebContent/ConnectionFromClient.h
 +++ b/Services/WebContent/ConnectionFromClient.h
 @@ -228,6 +228,7 @@ private:
-     virtual void set_preferred_color_scheme(Web::PageId page_id, Web::CSS::PreferredColorScheme) override;
-     virtual void set_preferred_contrast(Web::PageId page_id, Web::CSS::PreferredContrast) override;
-     virtual void set_preferred_motion(Web::PageId page_id, Web::CSS::PreferredMotion) override;
-+    virtual void set_transparent_background(Web::PageId page_id, bool transparent) override;
-     virtual void set_preferred_languages(Web::PageId page_id, Vector<String>) override;
-     virtual void set_browsing_behavior(Web::PageId page_id, WebView::BrowsingBehavior) override;
-     virtual void set_enable_global_privacy_control(Web::PageId page_id, bool) override;
+     virtual void set_preferred_color_scheme(Compositing::PageId page_id, Web::CSS::PreferredColorScheme) override;
+     virtual void set_preferred_contrast(Compositing::PageId page_id, Web::CSS::PreferredContrast) override;
+     virtual void set_preferred_motion(Compositing::PageId page_id, Web::CSS::PreferredMotion) override;
++    virtual void set_transparent_background(Compositing::PageId page_id, bool transparent) override;
+     virtual void set_preferred_languages(Compositing::PageId page_id, Vector<String>) override;
+     virtual void set_browsing_behavior(Compositing::PageId page_id, WebView::BrowsingBehavior) override;
+     virtual void set_enable_global_privacy_control(Compositing::PageId page_id, bool) override;
 diff --git a/Services/WebContent/PageClient.cpp b/Services/WebContent/PageClient.cpp
 index 479d0a7462..e88c176b6e 100644
 --- a/Services/WebContent/PageClient.cpp
@@ -81,14 +81,14 @@ diff --git a/Services/WebContent/WebContentServer.ipc b/Services/WebContent/WebC
 index 81f3283177..16946d7fee 100644
 --- a/Services/WebContent/WebContentServer.ipc
 +++ b/Services/WebContent/WebContentServer.ipc
-@@ -225,6 +225,7 @@ endpoint WebContentServer routed by Web::PageId page_id
-     set_preferred_color_scheme(Web::PageId page_id, Web::CSS::PreferredColorScheme color_scheme) =|
-     set_preferred_contrast(Web::PageId page_id, Web::CSS::PreferredContrast contrast) =|
-     set_preferred_motion(Web::PageId page_id, Web::CSS::PreferredMotion motion) =|
-+    set_transparent_background(Web::PageId page_id, bool transparent) =|
-     set_preferred_languages(Web::PageId page_id, Vector<String> preferred_languages) =|
-     set_browsing_behavior(Web::PageId page_id, WebView::BrowsingBehavior browsing_behavior) =|
-     set_enable_global_privacy_control(Web::PageId page_id, bool enable) =|
+@@ -225,6 +225,7 @@ endpoint WebContentServer routed by Compositing::PageId page_id
+     set_preferred_color_scheme(Compositing::PageId page_id, Web::CSS::PreferredColorScheme color_scheme) =|
+     set_preferred_contrast(Compositing::PageId page_id, Web::CSS::PreferredContrast contrast) =|
+     set_preferred_motion(Compositing::PageId page_id, Web::CSS::PreferredMotion motion) =|
++    set_transparent_background(Compositing::PageId page_id, bool transparent) =|
+     set_preferred_languages(Compositing::PageId page_id, Vector<String> preferred_languages) =|
+     set_browsing_behavior(Compositing::PageId page_id, WebView::BrowsingBehavior browsing_behavior) =|
+     set_enable_global_privacy_control(Compositing::PageId page_id, bool enable) =|
 diff --git a/UI/Qt/WebContentView.cpp b/UI/Qt/WebContentView.cpp
 index c61eac1816..bc02443962 100644
 --- a/UI/Qt/WebContentView.cpp

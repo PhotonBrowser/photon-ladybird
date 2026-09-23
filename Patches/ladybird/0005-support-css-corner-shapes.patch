@@ -68,9 +68,9 @@ diff --git a/Libraries/LibGfx/Rust/src/corner_radii.rs b/Libraries/LibGfx/Rust/s
          };
          if self.top_left.is_present() {
              let cx = rect.x + self.top_left.horizontal_radius as f32;
-diff --git a/Libraries/LibWeb/Painting/DisplayListCommand.h b/Libraries/LibWeb/Painting/DisplayListCommand.h
---- a/Libraries/LibWeb/Painting/DisplayListCommand.h
-+++ b/Libraries/LibWeb/Painting/DisplayListCommand.h
+diff --git a/Libraries/LibCompositing/DisplayList/DisplayListCommand.h b/Libraries/LibCompositing/DisplayList/DisplayListCommand.h
+--- a/Libraries/LibCompositing/DisplayList/DisplayListCommand.h
++++ b/Libraries/LibCompositing/DisplayList/DisplayListCommand.h
 @@ -142,7 +142,7 @@
  static_assert(sizeof(DisplayListCommandRun) == 40);
  static_assert(IsTriviallyCopyable<DisplayListGlyph>);
@@ -80,9 +80,9 @@ diff --git a/Libraries/LibWeb/Painting/DisplayListCommand.h b/Libraries/LibWeb/P
  static_assert(IsTriviallyCopyable<DisplayListInlineTransform>);
  static_assert(sizeof(DisplayListInlineTransform) == 32);
  
-diff --git a/Libraries/LibWeb/Painting/DisplayListPlayerSkia.cpp b/Libraries/LibWeb/Painting/DisplayListPlayerSkia.cpp
---- a/Libraries/LibWeb/Painting/DisplayListPlayerSkia.cpp
-+++ b/Libraries/LibWeb/Painting/DisplayListPlayerSkia.cpp
+diff --git a/Libraries/LibCompositing/DisplayList/DisplayListPlayerSkia.cpp b/Libraries/LibCompositing/DisplayList/DisplayListPlayerSkia.cpp
+--- a/Libraries/LibCompositing/DisplayList/DisplayListPlayerSkia.cpp
++++ b/Libraries/LibCompositing/DisplayList/DisplayListPlayerSkia.cpp
 @@ -16,6 +16,7 @@
  #include <core/SkColorSpace.h>
  #include <core/SkMaskFilter.h>
@@ -341,9 +341,9 @@ diff --git a/Libraries/LibWeb/Rust/src/painting/border_radii.rs b/Libraries/LibW
          }
      }
  
-diff --git a/Libraries/LibWeb/Rust/src/painting/display_list/commands.rs b/Libraries/LibWeb/Rust/src/painting/display_list/commands.rs
---- a/Libraries/LibWeb/Rust/src/painting/display_list/commands.rs
-+++ b/Libraries/LibWeb/Rust/src/painting/display_list/commands.rs
+diff --git a/Libraries/LibCompositing/Rust/src/display_list/commands.rs b/Libraries/LibCompositing/Rust/src/display_list/commands.rs
+--- a/Libraries/LibCompositing/Rust/src/display_list/commands.rs
++++ b/Libraries/LibCompositing/Rust/src/display_list/commands.rs
 @@ -546,7 +546,7 @@
      mode
  });
@@ -353,9 +353,9 @@ diff --git a/Libraries/LibWeb/Rust/src/painting/display_list/commands.rs b/Libra
  
  #[derive(Clone, Copy, Debug, PartialEq)]
  #[repr(C)]
-diff --git a/Libraries/LibWeb/Rust/src/painting/display_list/ffi_bytes.rs b/Libraries/LibWeb/Rust/src/painting/display_list/ffi_bytes.rs
---- a/Libraries/LibWeb/Rust/src/painting/display_list/ffi_bytes.rs
-+++ b/Libraries/LibWeb/Rust/src/painting/display_list/ffi_bytes.rs
+diff --git a/Libraries/LibCompositing/Rust/src/display_list/ffi_bytes.rs b/Libraries/LibCompositing/Rust/src/display_list/ffi_bytes.rs
+--- a/Libraries/LibCompositing/Rust/src/display_list/ffi_bytes.rs
++++ b/Libraries/LibCompositing/Rust/src/display_list/ffi_bytes.rs
 @@ -98,7 +98,8 @@
  ffi_bytes_fields!(FloatMatrix4x4 { elements });
  ffi_bytes_fields!(CornerRadius {
@@ -427,9 +427,9 @@ diff --git a/Libraries/LibWeb/Rust/src/painting/visual_context/node_values.rs b/
      // A corner only keeps its radius when the fragment piece retains both of the box's edges
      // meeting there; corners cut by fragmentation are square.
      const TOP_EDGE: u8 = 1 << 0;
-diff --git a/Libraries/LibWeb/Rust/src/painting/visual_context/serialize.rs b/Libraries/LibWeb/Rust/src/painting/visual_context/serialize.rs
---- a/Libraries/LibWeb/Rust/src/painting/visual_context/serialize.rs
-+++ b/Libraries/LibWeb/Rust/src/painting/visual_context/serialize.rs
+diff --git a/Libraries/LibCompositing/Rust/src/visual_context/serialize.rs b/Libraries/LibCompositing/Rust/src/visual_context/serialize.rs
+--- a/Libraries/LibCompositing/Rust/src/visual_context/serialize.rs
++++ b/Libraries/LibCompositing/Rust/src/visual_context/serialize.rs
 @@ -138,6 +138,7 @@
      fn corner_radius(&mut self, radius: CornerRadius) {
          self.i32(radius.horizontal_radius);

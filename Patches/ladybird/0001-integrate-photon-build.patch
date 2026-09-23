@@ -2,30 +2,9 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
 index 395938377..18b8c8f8d 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -140,6 +140,7 @@ endif()
+@@ -151,4 +151,5 @@
  if (ENABLE_GUI_TARGETS)
      add_subdirectory(Services)
      add_subdirectory(UI)
 +    add_subdirectory(Photon)
  endif()
- 
- add_custom_target(lint-shell-scripts
-diff --git a/vcpkg.json b/vcpkg.json
-index eef364185..13a9e81d6 100644
---- a/vcpkg.json
-+++ b/vcpkg.json
-@@ -180,6 +180,11 @@
-       "platform": "windows | freebsd",
-       "default-features": false
-     },
-+    {
-+      "name": "qtdeclarative",
-+      "platform": "windows | freebsd",
-+      "default-features": false
-+    },
-     {
-       "name": "sdl3",
-       "default-features": false
-     },
-     "simdjson",
-     "simdutf",
