@@ -13,6 +13,7 @@
 
 #include <QFile>
 #include <QUrl>
+#include <QUrlQuery>
 
 namespace Photon {
 
