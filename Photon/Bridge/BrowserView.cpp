@@ -130,7 +130,7 @@ Ladybird::WebContentView& BrowserView::create_view(uint64_t tab_id)
 {
     auto* view = new Ladybird::WebContentView(&m_host);
     m_views.insert(tab_id, view);
-    view->set_preferred_color_scheme(preferred_color_scheme(photon_browser_theme_mode(m_state)));
+    view->set_preferred_color_scheme(preferred_color_scheme());
     view->hide();
     view->on_url_change = [this, tab_id](URL::URL const& url) {
         update_url(tab_id, qstring_from_ak_string(url.serialize()));

@@ -12,6 +12,7 @@
 
 #include <QCoreApplication>
 #include <QGuiApplication>
+#include <QProcess>
 #include <QStyleHints>
 
 #include <cstdlib>
@@ -23,6 +24,20 @@ bool is_using_dark_system_theme(QWidget&);
 
 bool is_using_dark_system_theme(QWidget& widget)
 {
+#if defined(AK_OS_LINUX)
+    if (qEnvironmentVariable("XDG_CURRENT_DESKTOP").contains(QStringLiteral("GNOME"), Qt::CaseInsensitive)) {
+        QProcess process;
+        process.start(QStringLiteral("gsettings"), { QStringLiteral("get"), QStringLiteral("org.gnome.desktop.interface"), QStringLiteral("color-scheme") });
+        if (process.waitForFinished(1000) && process.exitCode() == 0) {
+            auto preference = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+            if (preference == QStringLiteral("'prefer-dark'"))
+                return true;
+            if (preference == QStringLiteral("'prefer-light'"))
+                return false;
+        }
+    }
+#endif
+
     auto color_scheme = QGuiApplication::styleHints()->colorScheme();
     if (color_scheme != Qt::ColorScheme::Unknown)
         return color_scheme == Qt::ColorScheme::Dark;
