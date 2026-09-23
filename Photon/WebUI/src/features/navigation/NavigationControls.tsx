@@ -1,4 +1,6 @@
-import { ArrowLeft, ArrowRight, RotateCw } from "lucide-react";
+// SPDX-License-Identifier: GPL-3.0-only
+import { ArrowLeft, ArrowRight } from "lucide-react";
+import { LoaderCircle, RotateCw } from "lucide-react";
 
 import type { BrowserSnapshot, PhotonApi } from "../../types";
 import { IconButton } from "../../ui/IconButton";
@@ -11,7 +13,7 @@ interface NavigationControlsProps {
 export function NavigationControls({ api, snapshot }: NavigationControlsProps): React.JSX.Element {
     const tab = snapshot.tabs.find((candidate) => candidate.id === snapshot.activeTabId);
     return (
-        <nav aria-label="Page navigation" className="photon-navigation-controls">
+        <nav aria-busy={tab?.loading ?? false} aria-label="Page navigation" className="photon-navigation-controls">
             <IconButton
                 ariaLabel="Back"
                 className="photon-toolbar-button"
@@ -20,7 +22,7 @@ export function NavigationControls({ api, snapshot }: NavigationControlsProps): 
                 variant="ghost"
                 onPress={() => api.navigation.back()}
             >
-                <ArrowLeft aria-hidden="true" size={18} />
+                <ArrowLeft aria-hidden="true" />
             </IconButton>
             <IconButton
                 ariaLabel="Forward"
@@ -30,16 +32,20 @@ export function NavigationControls({ api, snapshot }: NavigationControlsProps): 
                 variant="ghost"
                 onPress={() => api.navigation.forward()}
             >
-                <ArrowRight aria-hidden="true" size={18} />
+                <ArrowRight aria-hidden="true" />
             </IconButton>
             <IconButton
-                ariaLabel={tab?.loading ? "Reloading page" : "Reload"}
+                ariaLabel="Reload page"
                 className="photon-toolbar-button"
                 size="sm"
                 variant="ghost"
                 onPress={() => api.navigation.reload()}
             >
-                <RotateCw aria-hidden="true" className={tab?.loading ? "photon-reload-loading" : undefined} size={17} />
+                {tab?.loading ? (
+                    <LoaderCircle aria-hidden="true" className="photon-spinner" />
+                ) : (
+                    <RotateCw aria-hidden="true" />
+                )}
             </IconButton>
         </nav>
     );

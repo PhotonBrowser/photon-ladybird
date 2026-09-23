@@ -1,6 +1,7 @@
+// SPDX-License-Identifier: GPL-3.0-only
 export type InternalPageId = "new-tab" | "settings";
 export type ThemeMode = "system" | "light" | "dark";
-export type BrowserOverlay = "site-info" | "browser-menu";
+export type BrowserOverlay = "site-info" | "browser-menu" | "settings-theme";
 
 export interface BrowserTab {
     id: string;
@@ -17,6 +18,7 @@ export interface BrowserSnapshot {
     tabs: BrowserTab[];
     activeTabId: string;
     themeMode: ThemeMode;
+    dimOverlays: boolean;
 }
 
 export interface PhotonBrowser {
@@ -45,6 +47,15 @@ export interface PhotonUi {
 
 export interface PhotonSettings {
     setTheme(mode: ThemeMode): void;
+    setDimOverlays(enabled: boolean): void;
+}
+
+export interface PhotonWindow {
+    platform: "macos" | "other";
+    beginDrag(): void;
+    minimize(): void;
+    toggleMaximize(): void;
+    close(): void;
 }
 
 export interface PhotonApi {
@@ -52,5 +63,6 @@ export interface PhotonApi {
     tabs: PhotonTabs;
     ui: PhotonUi;
     settings: PhotonSettings;
+    window: PhotonWindow;
     browser: PhotonBrowser;
 }

@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2026, the Photon developers.
  *
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-3.0-only
  */
 
 #include <Photon/Bridge/BrowserView.h>
@@ -16,12 +16,10 @@
 #include <QCloseEvent>
 #include <QKeyEvent>
 #include <QKeySequence>
-#include <QQuickItem>
-#include <QQuickWidget>
 #include <QResizeEvent>
 #include <QShortcut>
 #include <QTimer>
-#include <QVariant>
+#include <QWindow>
 
 namespace Photon {
 
@@ -48,9 +46,6 @@ Window::~Window()
     }
     delete m_scene;
     m_scene = nullptr;
-    delete m_quick_view;
-    m_quick_view = nullptr;
-    m_surface_item = nullptr;
     m_browser.reset();
 }
 
@@ -98,86 +93,60 @@ void Window::install_web_shortcuts()
     qApp->installEventFilter(this);
 }
 
-bool Window::initialize(bool web_ui)
+bool Window::initialize()
 {
-    if (web_ui) {
-        m_scene = new WindowScene(*m_browser, *this);
-        m_scene->chrome().on_command = [this](QString const& command, QString const& value) {
-            if (command != QStringLiteral("capture"))
-                m_scene->clear_open_overlays();
-            if (command == QStringLiteral("navigate"))
-                m_browser->navigate(value);
-            else if (command == QStringLiteral("back"))
-                m_browser->go_back();
-            else if (command == QStringLiteral("forward"))
-                m_browser->go_forward();
-            else if (command == QStringLiteral("reload"))
-                m_browser->reload();
-            else if (command == QStringLiteral("new-tab"))
-                m_browser->create_tab();
-            else if (command == QStringLiteral("open-settings"))
-                m_browser->open_settings();
-            else if (command == QStringLiteral("select-tab"))
-                m_browser->select_tab(value.mid(4).toULongLong());
-            else if (command == QStringLiteral("close-tab"))
-                m_browser->close_tab(value.mid(4).toULongLong());
-            else if (command == QStringLiteral("reorder-tabs")) {
-                QList<uint64_t> tab_ids;
-                for (auto const& tab_id : value.split(QLatin1Char(',')))
-                    tab_ids.append(tab_id.mid(4).toULongLong());
-                m_browser->reorder_tabs(tab_ids);
-            } else if (command == QStringLiteral("set-theme"))
-                m_browser->set_theme_mode(value);
-            else if (command == QStringLiteral("capture")) {
-                m_scene->set_overlay_open(value.endsWith(QStringLiteral(":open")));
-            }
-        };
-        m_scene->load_chrome();
-        install_web_shortcuts();
-        connect(m_browser.get(), &BrowserView::title_changed, this, [this] {
-            auto title = m_browser->title();
-            setWindowTitle(title.isEmpty() ? QStringLiteral("Photon") : QStringLiteral("%1 — Photon").arg(title));
-        });
-        return true;
-    }
-
-    m_quick_view = new QQuickWidget(this);
-    m_quick_view->setResizeMode(QQuickWidget::SizeRootObjectToView);
-    m_quick_view->setInitialProperties({ { QStringLiteral("browserState"), QVariant::fromValue(static_cast<QObject*>(m_browser.get())) } });
-    m_quick_view->setSource(QUrl(QStringLiteral("qrc:/Photon/UI/Main.qml")));
-    if (m_quick_view->status() == QQuickWidget::Error)
-        return false;
-
-    m_surface_item = m_quick_view->rootObject()->findChild<QQuickItem*>(QStringLiteral("browserSurface"));
-    if (!m_surface_item)
-        return false;
-
-    auto update_geometry = [this] { update_web_surface_geometry(); };
-    connect(m_surface_item, &QQuickItem::xChanged, this, update_geometry);
-    connect(m_surface_item, &QQuickItem::yChanged, this, update_geometry);
-    connect(m_surface_item, &QQuickItem::widthChanged, this, update_geometry);
-    connect(m_surface_item, &QQuickItem::heightChanged, this, update_geometry);
-
-    m_quick_view->show();
-    m_browser->widget().setVisible(!m_browser->is_internal_page());
-    if (!m_browser->is_internal_page())
-        m_browser->widget().raise();
-    connect(m_browser.get(), &BrowserView::active_tab_changed, this, [this] {
-        update_web_surface_geometry();
-        auto& page = m_browser->widget();
-        if (!m_browser->is_internal_page())
-            page.raise();
-        auto& application = static_cast<Application&>(WebView::Application::the());
-        application.set_active_view(page);
+#ifndef Q_OS_MACOS
+    setWindowFlag(Qt::FramelessWindowHint);
+#endif
+    m_scene = new WindowScene(*m_browser, *this);
+    m_scene->chrome().on_command = [this](QString const& command, QString const& value) {
+        if (command != QStringLiteral("capture"))
+            m_scene->clear_open_overlays();
+        if (command == QStringLiteral("navigate"))
+            m_browser->navigate(value);
+        else if (command == QStringLiteral("back"))
+            m_browser->go_back();
+        else if (command == QStringLiteral("forward"))
+            m_browser->go_forward();
+        else if (command == QStringLiteral("reload"))
+            m_browser->reload();
+        else if (command == QStringLiteral("new-tab"))
+            m_browser->create_tab();
+        else if (command == QStringLiteral("open-settings"))
+            m_browser->open_settings();
+        else if (command == QStringLiteral("select-tab"))
+            m_browser->select_tab(value.mid(4).toULongLong());
+        else if (command == QStringLiteral("close-tab"))
+            m_browser->close_tab(value.mid(4).toULongLong());
+        else if (command == QStringLiteral("reorder-tabs")) {
+            QList<uint64_t> tab_ids;
+            for (auto const& tab_id : value.split(QLatin1Char(',')))
+                tab_ids.append(tab_id.mid(4).toULongLong());
+            m_browser->reorder_tabs(tab_ids);
+        } else if (command == QStringLiteral("set-theme"))
+            m_browser->set_theme_mode(value);
+        else if (command == QStringLiteral("set-dim-overlays"))
+            m_browser->set_dim_overlays(value == QStringLiteral("true"));
+        else if (command == QStringLiteral("window-minimize"))
+            showMinimized();
+        else if (command == QStringLiteral("window-toggle-maximize"))
+            isMaximized() ? showNormal() : showMaximized();
+        else if (command == QStringLiteral("window-close"))
+            QTimer::singleShot(0, this, [this] { close(); });
+        else if (command == QStringLiteral("window-drag")) {
+            if (windowHandle())
+                windowHandle()->startSystemMove();
+        }
+        else if (command == QStringLiteral("capture")) {
+            m_scene->set_overlay_open(value.endsWith(QStringLiteral(":open")));
+        }
+    };
+    m_scene->load_chrome();
+    install_web_shortcuts();
+    connect(m_browser.get(), &BrowserView::title_changed, this, [this] {
+        auto title = m_browser->title();
+        setWindowTitle(title.isEmpty() ? QStringLiteral("Photon") : QStringLiteral("%1 — Photon").arg(title));
     });
-    connect(m_browser.get(), &BrowserView::browser_state_changed, this, [this] {
-        auto& page = m_browser->widget();
-        page.setVisible(!m_browser->is_internal_page());
-        if (!m_browser->is_internal_page())
-            page.raise();
-    });
-    m_browser->widget().raise();
-    QTimer::singleShot(0, this, update_geometry);
     return true;
 }
 
@@ -194,12 +163,8 @@ bool Window::eventFilter(QObject* watched, QEvent* event)
 void Window::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
-    if (m_scene) {
+    if (m_scene)
         m_scene->setGeometry(rect());
-        return;
-    }
-    m_quick_view->setGeometry(rect());
-    update_web_surface_geometry();
 }
 
 void Window::closeEvent(QCloseEvent* event)
@@ -212,23 +177,7 @@ void Window::closeEvent(QCloseEvent* event)
     application.clear_active_view();
     delete m_scene;
     m_scene = nullptr;
-    delete m_quick_view;
-    m_quick_view = nullptr;
-    m_surface_item = nullptr;
     m_browser.reset();
-}
-
-void Window::update_web_surface_geometry()
-{
-    if (!m_surface_item)
-        return;
-
-    auto origin = m_surface_item->mapToScene(QPointF(0, 0));
-    m_browser->widget().setGeometry(
-        qRound(origin.x()),
-        qRound(origin.y()),
-        qRound(m_surface_item->width()),
-        qRound(m_surface_item->height()));
 }
 
 }

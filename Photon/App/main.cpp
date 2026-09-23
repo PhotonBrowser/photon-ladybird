@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2026, the Photon developers.
  *
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-3.0-only
  */
 
 #include <LibMain/Main.h>
@@ -14,9 +14,6 @@
 #include <QGuiApplication>
 #include <QProcess>
 #include <QStyleHints>
-
-#include <cstdlib>
-#include <cstring>
 
 namespace Ladybird {
 
@@ -56,25 +53,13 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
 
     auto application = TRY(Photon::Application::create(arguments));
 
-    auto selected_ui = getenv("PHOTON_UI");
-    bool qml_ui = selected_ui && StringView(selected_ui, strlen(selected_ui)) == "qml"sv;
-    bool web_ui = !qml_ui;
-    if (qml_ui)
-        warnln("Photon: the QML UI is deprecated and will be removed after the React Web UI migration");
-
     Photon::Window window;
-    if (!window.initialize(web_ui)) {
-        if (web_ui)
-            return Error::from_string_literal("Photon failed to load its Web UI");
-        return Error::from_string_literal("Photon failed to load its QML interface");
-    }
+    if (!window.initialize())
+        return Error::from_string_literal("Photon failed to load its Web UI");
 
     application->set_active_view(window.browser().widget());
     window.show();
-    if (qml_ui)
-        window.browser().navigate(QStringLiteral("https://example.com"));
-    else
-        window.browser().load_initial_url();
+    window.browser().load_initial_url();
 
     return application->execute();
 }

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import { Popover } from "@heroui/react";
 import { Asterisk, LockKeyhole, ShieldAlert, X } from "lucide-react";
 
@@ -17,7 +18,7 @@ export function SiteSecurity({ isOpen, tab, onOpenChange }: SiteSecurityProps): 
     return host ? (
         <Popover isOpen={isOpen} onOpenChange={onOpenChange}>
             <Popover.Trigger aria-label="Site information" className="photon-icon-button photon-site-info-button">
-                <Asterisk aria-hidden="true" size={19} strokeWidth={2.4} />
+                <Asterisk aria-hidden="true" />
             </Popover.Trigger>
             <Popover.Content className="photon-popover photon-site-popover" placement="bottom start">
                 <Popover.Dialog aria-label={`Site information for ${host}`}>
@@ -30,15 +31,11 @@ export function SiteSecurity({ isOpen, tab, onOpenChange }: SiteSecurityProps): 
                             variant="ghost"
                             onPress={() => onOpenChange(false)}
                         >
-                            <X aria-hidden="true" size={16} />
+                            <X aria-hidden="true" />
                         </IconButton>
                     </header>
                     <div className="photon-security-row">
-                        {secure ? (
-                            <LockKeyhole aria-hidden="true" size={18} />
-                        ) : (
-                            <ShieldAlert aria-hidden="true" size={18} />
-                        )}
+                        {secure ? <LockKeyhole aria-hidden="true" /> : <ShieldAlert aria-hidden="true" />}
                         <span>{secure ? "Page loaded over HTTPS" : "Page is not using HTTPS"}</span>
                     </div>
                     <p className="photon-popover-note">
@@ -55,7 +52,7 @@ export function SiteSecurity({ isOpen, tab, onOpenChange }: SiteSecurityProps): 
             size="sm"
             variant="ghost"
         >
-            <Asterisk aria-hidden="true" size={19} strokeWidth={2.4} />
+            <Asterisk aria-hidden="true" />
         </IconButton>
     );
 }

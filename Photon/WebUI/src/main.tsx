@@ -1,8 +1,12 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import { createRoot } from "react-dom/client";
 
 import App from "./App";
+import { createNavigationCommandTransport } from "./bridge/transport";
 import "./styles.css";
 import type { BrowserSnapshot, PhotonApi, ThemeMode } from "./types";
+
+const searchParams = new URLSearchParams(window.location.search);
 
 const developmentSnapshot: BrowserSnapshot = {
     tabs: [
@@ -19,10 +23,11 @@ const developmentSnapshot: BrowserSnapshot = {
     ],
     activeTabId: "tab-1",
     themeMode: "system",
+    dimOverlays: false,
 };
 
 const snapshotFromDevServer = (): BrowserSnapshot | undefined => {
-    const value = new URLSearchParams(window.location.search).get("photonInitialState");
+    const value = searchParams.get("photonInitialState");
     if (!value) return undefined;
     try {
         return JSON.parse(value) as BrowserSnapshot;
@@ -33,37 +38,44 @@ const snapshotFromDevServer = (): BrowserSnapshot | undefined => {
 
 let snapshot = window.__photonInitialState ?? snapshotFromDevServer() ?? developmentSnapshot;
 const listeners = new Set<(state: BrowserSnapshot) => void>();
-const nativeBridgeAvailable =
-    window.__photonInitialState !== undefined || new URLSearchParams(window.location.search).has("photonInitialState");
+const nativeBridgeAvailable = window.__photonInitialState !== undefined || searchParams.has("photonInitialState");
+const platform = window.__photonPlatform ?? (searchParams.get("photonPlatform") === "macos" ? "macos" : "other");
 
-const emitCommand = (name: string, value?: string): void => {
-    if (!nativeBridgeAvailable) return;
-    const query = value === undefined ? "" : `?value=${encodeURIComponent(value)}`;
-    window.location.href = `photon-command://${name}${query}`;
-};
+const commandTransport = createNavigationCommandTransport(nativeBridgeAvailable);
 
 const parseThemeMode = (value: unknown): ThemeMode | undefined =>
     value === "system" || value === "light" || value === "dark" ? value : undefined;
 
 const photon: PhotonApi = {
     navigation: {
-        navigate: (url) => emitCommand("navigate", url),
-        back: () => emitCommand("back"),
-        forward: () => emitCommand("forward"),
-        reload: () => emitCommand("reload"),
+        navigate: (url) => commandTransport.dispatch({ kind: "navigate", url }),
+        back: () => commandTransport.dispatch({ kind: "back" }),
+        forward: () => commandTransport.dispatch({ kind: "forward" }),
+        reload: () => commandTransport.dispatch({ kind: "reload" }),
     },
     tabs: {
-        create: () => emitCommand("new-tab"),
-        openSettings: () => emitCommand("open-settings"),
-        select: (tabId) => emitCommand("select-tab", tabId),
-        close: (tabId) => emitCommand("close-tab", tabId),
-        reorder: (tabIds) => emitCommand("reorder-tabs", tabIds.join(",")),
+        create: () => commandTransport.dispatch({ kind: "new-tab" }),
+        openSettings: () => commandTransport.dispatch({ kind: "open-settings" }),
+        select: (tabId) => commandTransport.dispatch({ kind: "select-tab", tabId }),
+        close: (tabId) => commandTransport.dispatch({ kind: "close-tab", tabId }),
+        reorder: (tabIds) => commandTransport.dispatch({ kind: "reorder-tabs", tabIds }),
     },
     ui: {
-        setCaptureRegion: (name, open) => emitCommand("capture", `${name}:${open ? "open" : "close"}`),
+        setCaptureRegion: (name, open) => {
+            if (name === "site-info" || name === "browser-menu")
+                commandTransport.dispatch({ kind: "capture", region: name, open });
+        },
     },
     settings: {
-        setTheme: (mode) => emitCommand("set-theme", mode),
+        setTheme: (mode) => commandTransport.dispatch({ kind: "set-theme", mode }),
+        setDimOverlays: (enabled) => commandTransport.dispatch({ kind: "set-dim-overlays", enabled }),
+    },
+    window: {
+        platform,
+        beginDrag: () => commandTransport.dispatch({ kind: "window-start-system-move" }),
+        minimize: () => commandTransport.dispatch({ kind: "window-minimize" }),
+        toggleMaximize: () => commandTransport.dispatch({ kind: "window-toggle-maximize" }),
+        close: () => commandTransport.dispatch({ kind: "window-close" }),
     },
     browser: {
         get state() {
@@ -92,7 +104,8 @@ function isBrowserSnapshot(value: unknown): value is BrowserSnapshot {
     return (
         Array.isArray(candidate.tabs) &&
         typeof candidate.activeTabId === "string" &&
-        parseThemeMode(candidate.themeMode) !== undefined
+        parseThemeMode(candidate.themeMode) !== undefined &&
+        typeof candidate.dimOverlays === "boolean"
     );
 }
 

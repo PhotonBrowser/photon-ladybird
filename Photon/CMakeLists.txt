@@ -1,10 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-only
 cmake_minimum_required(VERSION 3.25)
 
 if (ANDROID OR IOS)
     return()
 endif()
 
-find_package(Qt6 6.9 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 QuickWidgets Widgets)
+find_package(Qt6 6.9 REQUIRED COMPONENTS Core Gui Widgets)
 
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
@@ -53,14 +54,9 @@ qt_add_executable(photon
     ${LADYBIRD_SOURCE_DIR}/UI/Qt/WebContentView.cpp
 )
 
-qt_add_resources(photon photon_qml
+qt_add_resources(photon photon_webui
     PREFIX "/Photon"
     FILES
-        UI/Main.qml
-        UI/components/AddressBar.qml
-        UI/components/BrowserSurface.qml
-        UI/components/NavigationBar.qml
-        UI/components/NavigationButton.qml
         WebUI/dist/index.html
 )
 
@@ -87,10 +83,6 @@ target_link_libraries(photon PRIVATE
     OpenSSL::SSL
     Qt::Core
     Qt::Gui
-    Qt::Qml
-    Qt::Quick
-    Qt::QuickControls2
-    Qt::QuickWidgets
     Qt::Widgets
     photon_core
 )

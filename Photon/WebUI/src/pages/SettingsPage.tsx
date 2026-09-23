@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import { ListBox, Select } from "@heroui/react";
 
 import type { BrowserSnapshot, PhotonApi, ThemeMode } from "../types";
@@ -5,6 +6,8 @@ import type { BrowserSnapshot, PhotonApi, ThemeMode } from "../types";
 interface SettingsPageProps {
     api: PhotonApi;
     snapshot: BrowserSnapshot;
+    themeDropdownOpen: boolean;
+    onThemeDropdownOpenChange(open: boolean): void;
 }
 
 const themeOptions: Array<{ id: ThemeMode; label: string }> = [
@@ -13,7 +16,7 @@ const themeOptions: Array<{ id: ThemeMode; label: string }> = [
     { id: "dark", label: "Dark" },
 ];
 
-export function SettingsPage({ api, snapshot }: SettingsPageProps): React.JSX.Element {
+export function SettingsPage({ api, snapshot, themeDropdownOpen, onThemeDropdownOpenChange }: SettingsPageProps): React.JSX.Element {
     return (
         <main aria-labelledby="settings-title" className="photon-internal-page photon-settings-page">
             <div className="photon-settings-content">
@@ -31,7 +34,9 @@ export function SettingsPage({ api, snapshot }: SettingsPageProps): React.JSX.El
                             <Select
                                 aria-label="Theme"
                                 className="photon-settings-select"
+                                isOpen={themeDropdownOpen}
                                 selectedKey={snapshot.themeMode}
+                                onOpenChange={onThemeDropdownOpenChange}
                                 onSelectionChange={(key) => {
                                     if (key === "system" || key === "light" || key === "dark") {
                                         api.settings.setTheme(key as ThemeMode);
@@ -57,6 +62,17 @@ export function SettingsPage({ api, snapshot }: SettingsPageProps): React.JSX.El
                                 </Select.Popover>
                             </Select>
                         </div>
+                        <label className="photon-settings-toggle-row">
+                            <span className="photon-settings-copy">
+                                <span className="photon-settings-toggle-title">Dim background for popovers and dropdowns</span>
+                                <span className="photon-settings-toggle-description">Darken the page behind open overlays.</span>
+                            </span>
+                            <input
+                                checked={snapshot.dimOverlays}
+                                onChange={(event) => api.settings.setDimOverlays(event.currentTarget.checked)}
+                                type="checkbox"
+                            />
+                        </label>
                     </section>
                     <section aria-labelledby="privacy-title" className="photon-settings-group">
                         <div className="photon-settings-copy">

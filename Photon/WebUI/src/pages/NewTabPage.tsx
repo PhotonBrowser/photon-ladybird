@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import logo from "../assets/photon-logo.svg";
 
 export function NewTabPage(): React.JSX.Element {

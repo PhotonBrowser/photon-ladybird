@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import { Input } from "@heroui/react";
 import { useEffect, useState, type FormEvent, type KeyboardEvent, type RefObject } from "react";
 
@@ -52,11 +53,11 @@ export function Omnibox({
             <SiteSecurity isOpen={siteInfoOpen} onOpenChange={onSiteInfoOpenChange} tab={activeTab} />
             <Input
                 ref={inputRef}
-                aria-label="Search or enter address"
+                aria-label="Search Google or enter address"
                 autoComplete="off"
                 className="photon-address-input"
                 inputMode="url"
-                placeholder="Search or enter address"
+                placeholder="Search Google or enter address"
                 value={isEditing ? draftAddress : isInternalPage ? "" : (activeTab?.url ?? "")}
                 variant="secondary"
                 onBlur={() => setEditingTabId(null)}

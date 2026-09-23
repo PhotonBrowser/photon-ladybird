@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2026, the Photon developers.
  *
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-3.0-only
  */
 
 #pragma once
@@ -33,7 +33,7 @@ typedef struct PhotonBrowserCommand {
     PhotonUtf8 argument;
 } PhotonBrowserCommand;
 
-PhotonBrowserState* photon_browser_state_new(void);
+PhotonBrowserState* photon_browser_state_new(uint8_t const* config_path, size_t config_path_len);
 void photon_browser_state_free(PhotonBrowserState* state);
 
 // Returned strings borrow state storage and remain valid only until its next mutation.
@@ -49,6 +49,7 @@ uint64_t photon_browser_adjacent_tab_id(PhotonBrowserState const* state, uint8_t
 uint8_t photon_browser_is_internal_page(PhotonBrowserState const* state);
 uint8_t photon_browser_theme_mode(PhotonBrowserState const* state);
 uint8_t photon_browser_set_theme_mode(PhotonBrowserState* state, uint8_t mode);
+uint8_t photon_browser_set_dim_overlays(PhotonBrowserState* state, uint8_t enabled);
 PhotonUtf8 photon_browser_tabs_json(PhotonBrowserState* state);
 uint64_t photon_browser_create_tab(PhotonBrowserState* state);
 uint64_t photon_browser_open_settings(PhotonBrowserState* state);

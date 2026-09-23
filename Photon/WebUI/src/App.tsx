@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import { useEffect, useRef, useState } from "react";
 
 import { Toolbar } from "./browser/Toolbar";
@@ -20,7 +21,7 @@ export default function App({ api }: AppProps): React.JSX.Element {
     const previousActiveTabKey = useRef(activeTabKey);
 
     const setOverlayOpen = (name: BrowserOverlay, open: boolean, notifyNative = true): void => {
-        if (notifyNative) api.ui.setCaptureRegion(name, open);
+        if (notifyNative && name !== "settings-theme") api.ui.setCaptureRegion(name, open);
         setActiveOverlay((current) => {
             if (open) return name;
             return current === name ? null : current;
@@ -30,14 +31,14 @@ export default function App({ api }: AppProps): React.JSX.Element {
     useEffect(() => {
         if (previousActiveTabKey.current === activeTabKey) return;
         previousActiveTabKey.current = activeTabKey;
-        if (activeOverlay) api.ui.setCaptureRegion(activeOverlay, false);
+        if (activeOverlay && activeOverlay !== "settings-theme") api.ui.setCaptureRegion(activeOverlay, false);
         setActiveOverlay(null);
     }, [activeOverlay, activeTabKey, api]);
 
     useEffect(() => {
         const focusAddressBar = (): void => {
             if (activeOverlay) {
-                api.ui.setCaptureRegion(activeOverlay, false);
+                if (activeOverlay !== "settings-theme") api.ui.setCaptureRegion(activeOverlay, false);
                 setActiveOverlay(null);
             }
             addressInput.current?.focus();
@@ -48,9 +49,16 @@ export default function App({ api }: AppProps): React.JSX.Element {
     }, [activeOverlay, api]);
 
     return (
-        <div className="photon-shell">
+        <div className="photon-shell" data-dim-overlays={snapshot.dimOverlays}>
             <div className="photon-chrome">
-                <div className="photon-titlebar">
+                <div
+                    className="photon-titlebar"
+                    onPointerDown={(event) => {
+                        if (event.button !== 0 || (event.target as Element).closest("button, input, a, [role='tab']"))
+                            return;
+                        api.window.beginDrag();
+                    }}
+                >
                     <TabStrip activeTabId={snapshot.activeTabId} api={api} tabs={snapshot.tabs} />
                 </div>
                 <Toolbar
@@ -73,7 +81,14 @@ export default function App({ api }: AppProps): React.JSX.Element {
                 />
             )}
             {activeTab?.internalPage === "new-tab" ? <NewTabPage /> : null}
-            {activeTab?.internalPage === "settings" ? <SettingsPage api={api} snapshot={snapshot} /> : null}
+            {activeTab?.internalPage === "settings" ? (
+                <SettingsPage
+                    api={api}
+                    snapshot={snapshot}
+                    themeDropdownOpen={activeOverlay === "settings-theme"}
+                    onThemeDropdownOpenChange={(open) => setOverlayOpen("settings-theme", open, false)}
+                />
+            ) : null}
         </div>
     );
 }

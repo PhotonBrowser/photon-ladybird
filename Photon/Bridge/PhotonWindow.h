@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2026, the Photon developers.
  *
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-3.0-only
  */
 
 #pragma once
@@ -10,8 +10,6 @@
 
 #include <memory>
 
-class QQuickItem;
-class QQuickWidget;
 class QCloseEvent;
 
 namespace Photon {
@@ -26,7 +24,7 @@ public:
     explicit Window(QWidget* parent = nullptr);
     virtual ~Window() override;
 
-    bool initialize(bool web_ui = true);
+    bool initialize();
     BrowserView& browser() const { return *m_browser; }
 
 protected:
@@ -36,12 +34,8 @@ protected:
 
 private:
     void install_web_shortcuts();
-    void update_web_surface_geometry();
-
     std::unique_ptr<BrowserView> m_browser;
     WindowScene* m_scene { nullptr };
-    QQuickWidget* m_quick_view { nullptr };
-    QQuickItem* m_surface_item { nullptr };
 };
 
 }

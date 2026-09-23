@@ -1,4 +1,7 @@
-import { Globe2, LoaderCircle, Plus, X } from "lucide-react";
+// SPDX-License-Identifier: GPL-3.0-only
+import { Minus, Plus, Square, X } from "lucide-react";
+import { Globe, LoaderCircle } from "lucide";
+import { MorphIcon } from "morphicons/react";
 import { useRef, useState } from "react";
 
 import photonLogoMonotone from "../../assets/photon-logo-monotone.svg";
@@ -44,6 +47,7 @@ export function TabStrip({ api, tabs, activeTabId }: TabStripProps): React.JSX.E
                         >
                             <button
                                 aria-selected={active}
+                                aria-busy={tab.loading}
                                 className={active ? "photon-tab photon-tab-active" : "photon-tab"}
                                 role="tab"
                                 tabIndex={active ? 0 : -1}
@@ -65,12 +69,11 @@ export function TabStrip({ api, tabs, activeTabId }: TabStripProps): React.JSX.E
                                 }}
                             >
                                 <span className="photon-tab-icon" aria-hidden="true">
-                                    {tab.loading ? (
-                                        <LoaderCircle className="animate-spin" size={14} />
-                                    ) : tab.internalPage ? (
+                                    {tab.internalPage ? (
                                         <img alt="" className="photon-tab-logo" src={photonLogoMonotone} />
                                     ) : (
                                         <WebTabIcon
+                                            loading={tab.loading}
                                             faviconUrl={tab.faviconUrl}
                                             key={`${tab.id}:${tab.faviconUrl ?? ""}`}
                                         />
@@ -85,7 +88,7 @@ export function TabStrip({ api, tabs, activeTabId }: TabStripProps): React.JSX.E
                                 variant="ghost"
                                 onPress={() => api.tabs.close(tab.id)}
                             >
-                                <X aria-hidden="true" size={13} />
+                                <X aria-hidden="true" />
                             </IconButton>
                         </div>
                     );
@@ -98,8 +101,39 @@ export function TabStrip({ api, tabs, activeTabId }: TabStripProps): React.JSX.E
                 variant="ghost"
                 onPress={() => api.tabs.create()}
             >
-                <Plus aria-hidden="true" size={17} />
+                <Plus aria-hidden="true" />
             </IconButton>
+            {api.window.platform !== "macos" && (
+                <div aria-label="Window controls" className="photon-window-controls" role="toolbar">
+                    <IconButton
+                        ariaLabel="Minimize window"
+                        className="photon-window-control"
+                        size="sm"
+                        variant="ghost"
+                        onPress={api.window.minimize}
+                    >
+                        <Minus aria-hidden="true" />
+                    </IconButton>
+                    <IconButton
+                        ariaLabel="Maximize or restore window"
+                        className="photon-window-control"
+                        size="sm"
+                        variant="ghost"
+                        onPress={api.window.toggleMaximize}
+                    >
+                        <Square aria-hidden="true" />
+                    </IconButton>
+                    <IconButton
+                        ariaLabel="Close window"
+                        className="photon-window-control photon-window-close"
+                        size="sm"
+                        variant="ghost"
+                        onPress={api.window.close}
+                    >
+                        <X aria-hidden="true" />
+                    </IconButton>
+                </div>
+            )}
         </div>
     );
 }
@@ -124,17 +158,28 @@ function focusAdjacentTab(event: React.KeyboardEvent<HTMLButtonElement>, api: Ph
     if (tabId) api.tabs.select(tabId);
 }
 
-function WebTabIcon({ faviconUrl }: { faviconUrl: string | null }): React.JSX.Element {
+function WebTabIcon({ faviconUrl, loading }: { faviconUrl: string | null; loading: boolean }): React.JSX.Element {
     const [failed, setFailed] = useState(false);
-    if (!faviconUrl || failed) return <Globe2 aria-hidden="true" size={14} />;
+    const fallback = !faviconUrl || failed;
     return (
-        <img
-            alt=""
-            className="photon-tab-favicon"
-            height={14}
-            src={faviconUrl}
-            width={14}
-            onError={() => setFailed(true)}
-        />
+        <>
+            <MorphIcon
+                aria-hidden="true"
+                className="photon-icon photon-tab-morph-icon"
+                icon={loading ? LoaderCircle : fallback ? Globe : undefined}
+                reducedMotion="user"
+                spring="snappy"
+            />
+            {!fallback && (
+                <img
+                    alt=""
+                    className="photon-tab-favicon"
+                    height={14}
+                    src={faviconUrl}
+                    width={14}
+                    onError={() => setFailed(true)}
+                />
+            )}
+        </>
     );
 }

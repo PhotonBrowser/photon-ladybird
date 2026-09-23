@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2026, the Photon developers.
  *
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-3.0-only
  */
 
 #include <Photon/Bridge/BrowserView.h>
@@ -15,7 +15,12 @@
 #include <UI/Qt/WebContentView.h>
 
 #include <QSet>
+#include <QStandardPaths>
 #include <QWidget>
+
+namespace Ladybird {
+bool is_using_dark_system_theme(QWidget&);
+}
 
 namespace Photon {
 
@@ -33,7 +38,7 @@ static PhotonBrowserCommand prepare_navigation(PhotonBrowserState* state, QStrin
         static_cast<size_t>(utf8.size()));
 }
 
-static Web::CSS::PreferredColorScheme preferred_color_scheme(uint8_t mode)
+static Web::CSS::PreferredColorScheme to_preferred_color_scheme(uint8_t mode)
 {
     switch (mode) {
     case 1:
@@ -64,7 +69,14 @@ private:
 BrowserView::BrowserView(QWidget& host)
     : QObject(&host)
     , m_host(host)
-    , m_state(photon_browser_state_new())
+    , m_state([&host] {
+        auto config_path = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+        config_path += QStringLiteral("/config.toml");
+        auto utf8_path = config_path.toUtf8();
+        return photon_browser_state_new(
+            reinterpret_cast<uint8_t const*>(utf8_path.constData()),
+            static_cast<size_t>(utf8_path.size()));
+    }())
 {
     create_view(active_tab_id());
 }
@@ -124,6 +136,22 @@ QString BrowserView::tabs_json() const
 bool BrowserView::is_internal_page() const
 {
     return photon_browser_is_internal_page(m_state) != 0;
+}
+
+Web::CSS::PreferredColorScheme BrowserView::preferred_color_scheme() const
+{
+    auto mode = photon_browser_theme_mode(m_state);
+    if (mode == 0)
+        return Ladybird::is_using_dark_system_theme(m_host) ? Web::CSS::PreferredColorScheme::Dark : Web::CSS::PreferredColorScheme::Light;
+    return to_preferred_color_scheme(mode);
+}
+
+void BrowserView::refresh_preferred_color_scheme()
+{
+    auto color_scheme = preferred_color_scheme();
+    for (auto* view : m_views)
+        view->set_preferred_color_scheme(color_scheme);
+    emit browser_state_changed();
 }
 
 Ladybird::WebContentView& BrowserView::create_view(uint64_t tab_id)
@@ -273,9 +301,13 @@ void BrowserView::set_theme_mode(QString const& mode)
     auto value = mode == QStringLiteral("light") ? 1 : mode == QStringLiteral("dark") ? 2 : 0;
     if (!photon_browser_set_theme_mode(m_state, static_cast<uint8_t>(value)))
         return;
-    auto color_scheme = preferred_color_scheme(static_cast<uint8_t>(value));
-    for (auto* view : m_views)
-        view->set_preferred_color_scheme(color_scheme);
+    refresh_preferred_color_scheme();
+}
+
+void BrowserView::set_dim_overlays(bool enabled)
+{
+    if (!photon_browser_set_dim_overlays(m_state, enabled))
+        return;
     emit browser_state_changed();
 }
 

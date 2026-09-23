@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2026, the Photon developers.
  *
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-3.0-only
  */
 
 #include <Photon/Bridge/BrowserView.h>
@@ -15,8 +15,10 @@
 #include <utility>
 
 #include <QEvent>
+#include <QGuiApplication>
 #include <QMouseEvent>
 #include <QResizeEvent>
+#include <QStyleHints>
 #include <QWheelEvent>
 
 namespace Photon {
@@ -30,6 +32,7 @@ WindowScene::WindowScene(BrowserView& browser, QWidget& parent)
     setAttribute(Qt::WA_TranslucentBackground);
     parent.installEventFilter(this);
     m_active_page_view = &m_browser.widget();
+    m_chrome->view().set_preferred_color_scheme(m_browser.preferred_color_scheme());
     m_active_page_view->setParent(this);
     m_active_page_view->installEventFilter(this);
     m_active_page_view->setGeometry(page_rect());
@@ -70,7 +73,11 @@ WindowScene::WindowScene(BrowserView& browser, QWidget& parent)
     });
     QObject::connect(&m_browser, &BrowserView::browser_state_changed, this, [this] {
         m_active_page_view->setVisible(!m_browser.is_internal_page());
+        m_chrome->view().set_preferred_color_scheme(m_browser.preferred_color_scheme());
         m_chrome->update_state(m_browser);
+    });
+    QObject::connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, [this](Qt::ColorScheme) {
+        m_browser.refresh_preferred_color_scheme();
     });
     // Keep the chrome surface a normal full-window child, but tell Qt that
     // unpainted pixels are part of the composition rather than a background.

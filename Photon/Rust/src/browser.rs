@@ -1,6 +1,12 @@
 // Copyright (c) 2026, the Photon developers.
 //
-// SPDX-License-Identifier: BSD-2-Clause
+// SPDX-License-Identifier: GPL-3.0-only
+
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+use crate::config::PhotonConfig;
 
 const NEW_TAB_URL: &str = "photon://newtab";
 
@@ -55,9 +61,12 @@ pub(crate) struct BrowserState {
     active_tab_id: u64,
     next_tab_id: u64,
     theme_mode: ThemeMode,
+    dim_overlays: bool,
+    config_path: Option<PathBuf>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub(crate) enum ThemeMode {
     #[default]
     System,
@@ -67,11 +76,32 @@ pub(crate) enum ThemeMode {
 
 impl BrowserState {
     pub(crate) fn initial() -> Self {
+        Self::with_config(None)
+    }
+
+    pub(crate) fn initial_with_config(path: &Path) -> Self {
+        Self::with_config(Some(path.to_owned()))
+    }
+
+    fn with_config(config_path: Option<PathBuf>) -> Self {
+        let config = config_path.as_deref().map(PhotonConfig::load).unwrap_or_default();
         Self {
             tabs: vec![BrowserTab::new_tab(1)],
             active_tab_id: 1,
             next_tab_id: 2,
-            theme_mode: ThemeMode::System,
+            theme_mode: config.theme_mode,
+            dim_overlays: config.dim_overlays,
+            config_path,
+        }
+    }
+
+    fn save_config(&self) {
+        if let Some(path) = &self.config_path {
+            PhotonConfig {
+                theme_mode: self.theme_mode,
+                dim_overlays: self.dim_overlays,
+            }
+            .save(path);
         }
     }
 
@@ -136,6 +166,16 @@ impl BrowserState {
             return false;
         }
         self.theme_mode = mode;
+        self.save_config();
+        true
+    }
+
+    pub(crate) fn set_dim_overlays(&mut self, enabled: bool) -> bool {
+        if self.dim_overlays == enabled {
+            return false;
+        }
+        self.dim_overlays = enabled;
+        self.save_config();
         true
     }
 
@@ -325,8 +365,8 @@ impl BrowserState {
             ThemeMode::Dark => "dark",
         };
         format!(
-            "{{\"tabs\":[{tabs}],\"activeTabId\":\"tab-{}\",\"themeMode\":\"{theme_mode}\"}}",
-            self.active_tab_id
+            "{{\"tabs\":[{tabs}],\"activeTabId\":\"tab-{}\",\"themeMode\":\"{theme_mode}\",\"dimOverlays\":{}}}",
+            self.active_tab_id, self.dim_overlays
         )
     }
 }
@@ -337,15 +377,83 @@ pub(crate) fn normalize_url_input(input: &str) -> Option<String> {
         return None;
     }
 
+    let lowercased = input.to_ascii_lowercase();
     if input.contains("://")
-        || ["about:", "data:", "file:", "view-source:"]
+        || ["about:", "data:", "file:", "http:", "https:", "view-source:"]
             .iter()
-            .any(|prefix| input.starts_with(prefix))
+            .any(|prefix| lowercased.starts_with(prefix))
     {
         return Some(input.to_owned());
     }
 
-    Some(format!("https://{input}"))
+    if looks_like_web_address(input) {
+        return Some(format!("https://{input}"));
+    }
+
+    Some(format!("https://www.google.com/search?q={}", google_query(input)))
+}
+
+fn looks_like_web_address(input: &str) -> bool {
+    let authority = input.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = authority.rsplit('@').next().unwrap_or_default();
+    if host.is_empty() {
+        return false;
+    }
+
+    if let Some(address) = host.strip_prefix('[').and_then(|host| host.split_once(']')) {
+        let (ipv6, suffix) = address;
+        let valid_port = suffix.is_empty() || suffix.strip_prefix(':').is_some_and(|port| port.parse::<u16>().is_ok());
+        return ipv6.parse::<std::net::Ipv6Addr>().is_ok() && valid_port;
+    }
+
+    let (hostname, has_port) = match host.rsplit_once(':') {
+        Some((hostname, port)) if port.parse::<u16>().is_ok() => (hostname, true),
+        Some(_) => return false,
+        None => (host, false),
+    };
+
+    if hostname.eq_ignore_ascii_case("localhost") || hostname.parse::<std::net::Ipv4Addr>().is_ok() {
+        return true;
+    }
+
+    let hostname = hostname.strip_suffix('.').unwrap_or(hostname);
+    let mut labels = hostname.split('.').peekable();
+    if labels.peek().is_none() {
+        return false;
+    }
+
+    let mut last_label_has_letter = false;
+    for label in labels {
+        if label.is_empty()
+            || label.starts_with('-')
+            || label.ends_with('-')
+            || !label
+                .chars()
+                .all(|character| character.is_alphanumeric() || character == '-')
+        {
+            return false;
+        }
+        last_label_has_letter = label.chars().any(char::is_alphabetic);
+    }
+
+    (hostname.contains('.') || has_port) && last_label_has_letter
+}
+
+fn google_query(input: &str) -> String {
+    let mut query = String::with_capacity(input.len());
+    for byte in input.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'*' => {
+                query.push(char::from(byte));
+            }
+            b' ' => query.push('+'),
+            _ => {
+                use std::fmt::Write;
+                let _ = write!(query, "%{byte:02X}");
+            }
+        }
+    }
+    query
 }
 
 fn replace_if_changed(current: &mut String, replacement: &str) -> bool {
@@ -491,7 +599,7 @@ mod tests {
         let state = BrowserState::initial();
         assert_eq!(
             state.snapshot_json(),
-            "{\"tabs\":[{\"id\":\"tab-1\",\"url\":\"photon://newtab\",\"title\":\"New Tab\",\"faviconUrl\":null,\"internalPage\":\"new-tab\",\"loading\":false,\"canGoBack\":false,\"canGoForward\":false}],\"activeTabId\":\"tab-1\",\"themeMode\":\"system\"}"
+            "{\"tabs\":[{\"id\":\"tab-1\",\"url\":\"photon://newtab\",\"title\":\"New Tab\",\"faviconUrl\":null,\"internalPage\":\"new-tab\",\"loading\":false,\"canGoBack\":false,\"canGoForward\":false}],\"activeTabId\":\"tab-1\",\"themeMode\":\"system\",\"dimOverlays\":false}"
         );
     }
 

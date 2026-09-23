@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2026, the Photon developers.
  *
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-3.0-only
  */
 
 #include <Photon/Bridge/BrowserView.h>
@@ -58,6 +58,11 @@ void ChromeSurface::load(BrowserView const& browser)
         m_trusted_document_loaded = true;
         QUrlQuery query(url);
         query.addQueryItem(QStringLiteral("photonInitialState"), QString::fromUtf8(initial_state));
+#ifdef Q_OS_MACOS
+        query.addQueryItem(QStringLiteral("photonPlatform"), QStringLiteral("macos"));
+#else
+        query.addQueryItem(QStringLiteral("photonPlatform"), QStringLiteral("other"));
+#endif
         url.setQuery(query);
         auto parsed_url = ak_url_from_qstring(url.toString());
         if (!parsed_url.has_value())
@@ -73,7 +78,12 @@ void ChromeSurface::load(BrowserView const& browser)
     auto head_end = html.indexOf("</head>");
     if (head_end < 0)
         return;
-    auto initial_state_script = QByteArrayLiteral("<script>window.__photonInitialState=") + initial_state + QByteArrayLiteral(";</script>");
+#ifdef Q_OS_MACOS
+    auto platform = QByteArrayLiteral("macos");
+#else
+    auto platform = QByteArrayLiteral("other");
+#endif
+    auto initial_state_script = QByteArrayLiteral("<script>window.__photonInitialState=") + initial_state + QByteArrayLiteral(";window.__photonPlatform='") + platform + QByteArrayLiteral("';</script>");
     html.insert(head_end, initial_state_script);
     auto document = QString::fromUtf8(html).toUtf8();
     m_trusted_document_loaded = true;
@@ -124,7 +134,9 @@ bool ChromeSurface::is_allowed_command(QUrl const& url, QString& command, QStrin
     command = url.host();
     if (command == QStringLiteral("back") || command == QStringLiteral("forward")
         || command == QStringLiteral("reload") || command == QStringLiteral("new-tab")
-        || command == QStringLiteral("open-settings"))
+        || command == QStringLiteral("open-settings") || command == QStringLiteral("window-minimize")
+        || command == QStringLiteral("window-toggle-maximize") || command == QStringLiteral("window-close")
+        || command == QStringLiteral("window-drag"))
         return !url.hasQuery() && items.isEmpty();
 
     if (items.size() != 1 || items.first().first != QStringLiteral("value"))
@@ -156,6 +168,9 @@ bool ChromeSurface::is_allowed_command(QUrl const& url, QString& command, QStrin
 
     if (command == QStringLiteral("set-theme"))
         return value == QStringLiteral("system") || value == QStringLiteral("light") || value == QStringLiteral("dark");
+
+    if (command == QStringLiteral("set-dim-overlays"))
+        return value == QStringLiteral("true") || value == QStringLiteral("false");
 
     if (command == QStringLiteral("capture"))
         return value == QStringLiteral("browser-menu:open") || value == QStringLiteral("browser-menu:close")

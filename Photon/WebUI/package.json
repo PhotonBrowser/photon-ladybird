@@ -1,6 +1,7 @@
 {
   "name": "photon-web-ui",
   "private": true,
+  "license": "GPL-3.0-only",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,7 +13,6 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.14",
-    "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^26.6.2",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
@@ -24,9 +24,10 @@
   "dependencies": {
     "@heroui/react": "^3.2.6",
     "@heroui/styles": "^3.2.6",
+    "lucide": "^1.47.0",
     "lucide-react": "^1.47.0",
+    "morphicons": "^1.7.1",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0",
-    "tailwindcss": "^4.3.3"
+    "react-dom": "^19.3.0"
   }
 }

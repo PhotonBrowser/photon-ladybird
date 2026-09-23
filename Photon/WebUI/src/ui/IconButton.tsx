@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import { Button, type ButtonProps } from "@heroui/react";
 import type { ReactNode } from "react";
 

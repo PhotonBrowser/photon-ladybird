@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2026, the Photon developers.
  *
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-3.0-only
  */
 
 #pragma once
@@ -10,6 +10,7 @@
 #include <QString>
 #include <QHash>
 #include <cstdint>
+#include <LibWeb/CSS/PreferredColorScheme.h>
 
 class QWidget;
 struct PhotonBrowserCommand;
@@ -44,6 +45,8 @@ public:
     uint64_t active_tab_id() const;
     QString tabs_json() const;
     bool is_internal_page() const;
+    Web::CSS::PreferredColorScheme preferred_color_scheme() const;
+    void refresh_preferred_color_scheme();
 
     Q_INVOKABLE bool navigate(QString const& input);
     Q_INVOKABLE void reload();
@@ -57,6 +60,7 @@ public:
     Q_INVOKABLE void close_tab(uint64_t tab_id);
     Q_INVOKABLE void reorder_tabs(QList<uint64_t> const& tab_ids);
     void set_theme_mode(QString const& mode);
+    void set_dim_overlays(bool enabled);
     void load_initial_url();
 
 signals:

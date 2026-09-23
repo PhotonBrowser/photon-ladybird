@@ -1,6 +1,6 @@
 // Copyright (c) 2026, the Photon developers.
 //
-// SPDX-License-Identifier: BSD-2-Clause
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The only unsafe boundary between Photon Rust state and the native adapter.
 
@@ -36,9 +36,19 @@ pub struct PhotonBrowserState {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn photon_browser_state_new() -> *mut PhotonBrowserState {
+/// # Safety
+///
+/// `config_path` must be null or point to `config_path_len` readable UTF-8 bytes for this call.
+pub unsafe extern "C" fn photon_browser_state_new(
+    config_path: *const u8,
+    config_path_len: usize,
+) -> *mut PhotonBrowserState {
+    // SAFETY: Native code supplies a byte slice valid for this call.
+    let config_path = unsafe { input_utf8(config_path, config_path_len) }
+        .filter(|path| !path.is_empty())
+        .map(std::path::Path::new);
     Box::into_raw(Box::new(PhotonBrowserState {
-        browser: BrowserState::initial(),
+        browser: config_path.map_or_else(BrowserState::initial, BrowserState::initial_with_config),
         command_argument: String::new(),
         snapshot_json: String::new(),
     }))
@@ -148,6 +158,14 @@ pub unsafe extern "C" fn photon_browser_set_theme_mode(state: *mut PhotonBrowser
         _ => ThemeMode::System,
     };
     state.browser.set_theme_mode(mode).into()
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn photon_browser_set_dim_overlays(state: *mut PhotonBrowserState, enabled: u8) -> u8 {
+    // SAFETY: Native code keeps the state alive for the duration of this call.
+    unsafe { state.as_mut() }
+        .is_some_and(|state| state.browser.set_dim_overlays(enabled != 0))
+        .into()
 }
 
 #[unsafe(no_mangle)]

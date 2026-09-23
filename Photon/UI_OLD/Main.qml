@@ -1,6 +1,6 @@
 // Copyright (c) 2026, the Photon developers.
 //
-// SPDX-License-Identifier: BSD-2-Clause
+// SPDX-License-Identifier: GPL-3.0-only
 
 import QtQuick
 import "components"
