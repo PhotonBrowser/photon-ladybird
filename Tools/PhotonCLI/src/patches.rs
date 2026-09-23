@@ -292,6 +292,38 @@ pub(crate) fn validate_sync_worktree(repository: &Path) -> Result<bool> {
     Ok(true)
 }
 
+/// Recognize the clean, unpatched upstream checkout left behind when a sync
+/// stopped so registered patches can be refreshed against the merged target.
+pub(crate) fn is_pristine_at_revision(repository: &Path, revision: &str) -> Result<bool> {
+    let status = Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=all"])
+        .current_dir(repository)
+        .output()?;
+    if !status.status.success() {
+        bail!("failed to inspect working tree");
+    }
+    if !status.stdout.is_empty() {
+        return Ok(false);
+    }
+
+    let paths = patch_paths(repository, &series(repository)?)?;
+    if paths.is_empty() {
+        return Ok(true);
+    }
+
+    let mut diff = Command::new("git");
+    diff.args(["diff", "--quiet", revision, "--"]).current_dir(repository);
+    for path in paths {
+        diff.arg(path);
+    }
+    let result = diff.status()?;
+    match result.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => bail!("failed to compare Ladybird checkout with upstream {revision}"),
+    }
+}
+
 /// Remove an already verified patch materialization so Git can merge pristine
 /// upstream files. Patches are reversed in the opposite order from the series.
 pub(crate) fn unmaterialize_for_sync(repository: &Path) -> Result<()> {

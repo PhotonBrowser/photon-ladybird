@@ -29,8 +29,6 @@ pub fn run(repository: &Path, fetch_only: bool, record: bool, no_fetch: bool) ->
         bail!("not on a branch; check out a topic branch before syncing");
     }
 
-    let patches_materialized = patches::validate_sync_worktree(repository)?;
-
     ui::header("Photon", Some("Sync upstream"));
     ui::kv("Branch", branch);
     ui::kv("Base", ui::sha(&recorded.revision));
@@ -51,12 +49,53 @@ pub fn run(repository: &Path, fetch_only: bool, record: bool, no_fetch: bool) ->
 
     let (target_ref, target_sha) = resolve_target(repository)?;
     ui::kv("Upstream", format!("{} ({target_ref})", ui::sha(&target_sha)));
-    check_series_on_revision(repository, &target_sha)?;
+    let patches_materialized = validate_sync_worktree(repository, &target_sha)?;
+    let series_check = check_series_on_revision(repository, &target_sha);
+
+    if let Err(error) = series_check {
+        if fetch_only {
+            return Err(error);
+        }
+
+        if is_ancestor(repository, &target_sha, "HEAD")? {
+            return Err(error.context(
+                "refresh the registered patches for the merged upstream, then rerun `./photon sync --record`",
+            ));
+        }
+
+        if !record {
+            return Err(error);
+        }
+
+        ui::step(format!(
+            "Merging {target_ref} so the conflicting patch can be refreshed..."
+        ));
+        if patches_materialized {
+            patches::unmaterialize_for_sync(repository)?;
+        }
+        let merged = Command::new("git")
+            .args(["merge", "--no-edit", &target_ref])
+            .current_dir(repository)
+            .status()
+            .context("failed to run git merge")?;
+        if !merged.success() {
+            ui::failure("Merge stopped with conflicts.");
+            ui::hint("Resolve them manually while the Ladybird patch series is unapplied, then update the patches.");
+            ui::hint("Nothing was reset, discarded, or pushed.");
+            return Ok(1);
+        }
+
+        ui::ok("Merged", ui::sha(&target_sha));
+        ui::failure("The registered patch series does not apply to the merged upstream.");
+        ui::hint("Refresh the affected patches, commit the patch updates, then rerun `./photon sync --record`.");
+        ui::hint("The recorded upstream base was not changed and no patches were materialized.");
+        return Ok(1);
+    }
 
     if is_ancestor(repository, &target_sha, "HEAD")? {
         ui::success(format!("Already in sync with {target_ref}."));
         if record {
-            return record_revision(repository, &recorded.revision, &target_sha);
+            return record_revision(repository, &recorded.revision, &target_sha, patches_materialized);
         }
         return Ok(0);
     }
@@ -92,7 +131,7 @@ pub fn run(repository: &Path, fetch_only: bool, record: bool, no_fetch: bool) ->
     check_series_on_revision(repository, &head).context("Photon patch series does not apply to the merged checkout")?;
 
     if record {
-        return record_revision(repository, &recorded.revision, &target_sha);
+        return record_revision(repository, &recorded.revision, &target_sha, false);
     }
 
     println!();
@@ -101,7 +140,7 @@ pub fn run(repository: &Path, fetch_only: bool, record: bool, no_fetch: bool) ->
     Ok(0)
 }
 
-fn record_revision(repository: &Path, recorded: &str, target_sha: &str) -> Result<i32> {
+fn record_revision(repository: &Path, recorded: &str, target_sha: &str, patches_materialized: bool) -> Result<i32> {
     patches::validate_recorded_base(repository, target_sha)?;
     if recorded == target_sha {
         ui::kv("Recorded base", format!("{} (already current)", ui::sha(target_sha)));
@@ -109,7 +148,11 @@ fn record_revision(repository: &Path, recorded: &str, target_sha: &str) -> Resul
         return Ok(0);
     }
 
-    patches::unmaterialize_for_sync(repository)?;
+    if patches_materialized {
+        patches::unmaterialize_for_sync(repository)?;
+    } else if !patches::is_pristine_at_revision(repository, target_sha)? {
+        bail!("Ladybird checkout is not pristine at upstream {target_sha}");
+    }
 
     let path = repository.join(UPSTREAM_TOML);
     let source = fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
@@ -119,6 +162,19 @@ fn record_revision(repository: &Path, recorded: &str, target_sha: &str) -> Resul
     ui::ok("Recorded base", format!("{} in {UPSTREAM_TOML}", ui::sha(target_sha)));
     patches::ensure_materialized(repository)?;
     Ok(0)
+}
+
+fn validate_sync_worktree(repository: &Path, target_sha: &str) -> Result<bool> {
+    match patches::validate_sync_worktree(repository) {
+        Ok(materialized) => Ok(materialized),
+        Err(original_error) => {
+            if patches::is_pristine_at_revision(repository, target_sha)? {
+                Ok(false)
+            } else {
+                Err(original_error)
+            }
+        }
+    }
 }
 
 fn check_series_on_revision(repository: &Path, revision: &str) -> Result<()> {
