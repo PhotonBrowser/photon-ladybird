@@ -14,15 +14,23 @@
 
 namespace Photon {
 
-struct NavigateCommand { QString url; };
+struct NavigateCommand {
+    QString url;
+};
 struct BackCommand { };
 struct ForwardCommand { };
 struct ReloadCommand { };
 struct NewTabCommand { };
 struct OpenSettingsCommand { };
-struct SelectTabCommand { uint64_t tab_id; };
-struct CloseTabCommand { uint64_t tab_id; };
-struct ReorderTabsCommand { QList<uint64_t> tab_ids; };
+struct SelectTabCommand {
+    uint64_t tab_id;
+};
+struct CloseTabCommand {
+    uint64_t tab_id;
+};
+struct ReorderTabsCommand {
+    QList<uint64_t> tab_ids;
+};
 
 enum class ThemeMode {
     System,
@@ -30,8 +38,12 @@ enum class ThemeMode {
     Dark,
 };
 
-struct SetThemeCommand { ThemeMode mode; };
-struct SetDimOverlaysCommand { bool enabled; };
+struct SetThemeCommand {
+    ThemeMode mode;
+};
+struct SetDimOverlaysCommand {
+    bool enabled;
+};
 
 enum class OverlayRegion {
     BrowserMenu,
@@ -50,7 +62,9 @@ enum class WindowCommand {
     StartSystemMove,
 };
 
-struct WindowControlCommand { WindowCommand command; };
+struct WindowControlCommand {
+    WindowCommand command;
+};
 
 using PhotonCommand = std::variant<
     NavigateCommand,

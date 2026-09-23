@@ -174,7 +174,8 @@ void Window::dispatch_command(PhotonCommand const& command)
             }
         } else
             static_assert(is_unhandled_command<Command>, "PhotonCommand is missing a dispatcher branch");
-    }, command);
+    },
+        command);
 }
 
 bool Window::eventFilter(QObject* watched, QEvent* event)

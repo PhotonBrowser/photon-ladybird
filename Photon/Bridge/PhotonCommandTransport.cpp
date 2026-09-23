@@ -33,25 +33,25 @@ static bool is_valid_tab_id(QString const& value, uint64_t& tab_id)
 std::optional<PhotonCommand> PhotonCommandTransport::decode(URL::URL const& url) const
 {
     if (!handles(url))
-        return {};
+        return { };
 
     QUrl parsed(qstring_from_ak_string(url.serialize()));
     if (!parsed.isValid() || !parsed.userInfo().isEmpty() || parsed.port(-1) != -1 || !parsed.path().isEmpty() || parsed.hasFragment())
-        return {};
+        return { };
 
     auto const items = QUrlQuery(parsed).queryItems(QUrl::FullyDecoded);
     auto const command = parsed.host();
     auto no_arguments = [&]() -> bool { return !parsed.hasQuery() && items.isEmpty(); };
     if (command == QStringLiteral("back") && no_arguments())
-        return BackCommand {};
+        return BackCommand { };
     if (command == QStringLiteral("forward") && no_arguments())
-        return ForwardCommand {};
+        return ForwardCommand { };
     if (command == QStringLiteral("reload") && no_arguments())
-        return ReloadCommand {};
+        return ReloadCommand { };
     if (command == QStringLiteral("new-tab") && no_arguments())
-        return NewTabCommand {};
+        return NewTabCommand { };
     if (command == QStringLiteral("open-settings") && no_arguments())
-        return OpenSettingsCommand {};
+        return OpenSettingsCommand { };
 
     if (command == QStringLiteral("window-minimize") && no_arguments())
         return WindowControlCommand { WindowCommand::Minimize };
@@ -63,13 +63,13 @@ std::optional<PhotonCommand> PhotonCommandTransport::decode(URL::URL const& url)
         return WindowControlCommand { WindowCommand::StartSystemMove };
 
     if (items.size() != 1 || items.first().first != QStringLiteral("value"))
-        return {};
+        return { };
     auto const& value = items.first().second;
 
     if (command == QStringLiteral("navigate")) {
         if (!value.trimmed().isEmpty())
             return NavigateCommand { value };
-        return {};
+        return { };
     }
 
     uint64_t tab_id = 0;
@@ -82,12 +82,12 @@ std::optional<PhotonCommand> PhotonCommandTransport::decode(URL::URL const& url)
         ReorderTabsCommand reorder;
         for (auto const& item : value.split(QLatin1Char(','), Qt::KeepEmptyParts)) {
             if (!is_valid_tab_id(item, tab_id))
-                return {};
+                return { };
             reorder.tab_ids.append(tab_id);
         }
         if (!reorder.tab_ids.isEmpty())
             return reorder;
-        return {};
+        return { };
     }
 
     if (command == QStringLiteral("set-theme")) {
@@ -97,7 +97,7 @@ std::optional<PhotonCommand> PhotonCommandTransport::decode(URL::URL const& url)
             return SetThemeCommand { ThemeMode::Light };
         if (value == QStringLiteral("dark"))
             return SetThemeCommand { ThemeMode::Dark };
-        return {};
+        return { };
     }
 
     if (command == QStringLiteral("set-dim-overlays")) {
@@ -105,20 +105,20 @@ std::optional<PhotonCommand> PhotonCommandTransport::decode(URL::URL const& url)
             return SetDimOverlaysCommand { true };
         if (value == QStringLiteral("false"))
             return SetDimOverlaysCommand { false };
-        return {};
+        return { };
     }
 
     if (command == QStringLiteral("capture")) {
         auto parts = value.split(QLatin1Char(':'), Qt::KeepEmptyParts);
         if (parts.size() != 2 || (parts[1] != QStringLiteral("open") && parts[1] != QStringLiteral("close")))
-            return {};
+            return { };
         if (parts[0] == QStringLiteral("browser-menu"))
             return SetOverlayCaptureCommand { OverlayRegion::BrowserMenu, parts[1] == QStringLiteral("open") };
         if (parts[0] == QStringLiteral("site-info"))
             return SetOverlayCaptureCommand { OverlayRegion::SiteInfo, parts[1] == QStringLiteral("open") };
     }
 
-    return {};
+    return { };
 }
 
 }
