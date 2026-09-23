@@ -4,6 +4,7 @@
 
 //! Photon-owned application state and its narrow native boundary.
 
+mod application;
 mod bridge;
 mod browser;
 mod config;

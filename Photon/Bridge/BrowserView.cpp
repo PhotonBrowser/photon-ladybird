@@ -14,7 +14,6 @@
 #include <UI/Qt/StringUtils.h>
 #include <UI/Qt/WebContentView.h>
 
-#include <QSet>
 #include <QStandardPaths>
 #include <QWidget>
 
@@ -36,6 +35,17 @@ static PhotonBrowserCommand prepare_navigation(PhotonBrowserState* state, QStrin
         state,
         reinterpret_cast<uint8_t const*>(utf8.constData()),
         static_cast<size_t>(utf8.size()));
+}
+
+static PhotonAppEffects dispatch_app_command(PhotonBrowserState* state, uint32_t kind, uint64_t value = 0, QList<uint64_t> const* ids = nullptr)
+{
+    PhotonAppCommand command {
+        .kind = kind,
+        .value = value,
+        .ids = ids ? ids->constData() : nullptr,
+        .ids_len = ids ? static_cast<size_t>(ids->size()) : 0,
+    };
+    return photon_app_dispatch(state, command);
 }
 
 static Web::CSS::PreferredColorScheme to_preferred_color_scheme(uint8_t mode)
@@ -231,32 +241,23 @@ void BrowserView::focus_web_content()
 
 uint64_t BrowserView::create_tab()
 {
-    return activate_created_tab(photon_browser_create_tab(m_state));
+    auto effects = dispatch_app_command(m_state, PhotonAppCommandKind_CreateTab);
+    auto tab_id = effects.created_tab_id;
+    apply_app_effects(effects);
+    return tab_id;
 }
 
 uint64_t BrowserView::open_settings()
 {
-    return activate_created_tab(photon_browser_open_settings(m_state));
-}
-
-uint64_t BrowserView::activate_created_tab(uint64_t tab_id)
-{
-    if (tab_id == 0)
-        return 0;
-    create_view(tab_id);
-    sync_view_visibility();
-    emit active_tab_changed();
-    emit_active_tab_state_changed();
+    auto effects = dispatch_app_command(m_state, PhotonAppCommandKind_OpenSettings);
+    auto tab_id = effects.created_tab_id;
+    apply_app_effects(effects);
     return tab_id;
 }
 
 void BrowserView::select_tab(uint64_t tab_id)
 {
-    if (!photon_browser_select_tab(m_state, tab_id))
-        return;
-    sync_view_visibility();
-    emit active_tab_changed();
-    emit_active_tab_state_changed();
+    apply_app_effects(dispatch_app_command(m_state, PhotonAppCommandKind_SelectTab, tab_id));
 }
 
 void BrowserView::select_adjacent_tab(bool previous)
@@ -266,49 +267,42 @@ void BrowserView::select_adjacent_tab(bool previous)
 
 void BrowserView::close_tab(uint64_t tab_id)
 {
-    auto old_ids = QSet<uint64_t> {};
-    for (size_t i = 0; i < photon_browser_tab_count(m_state); ++i)
-        old_ids.insert(photon_browser_tab_id_at(m_state, i));
-    auto old_active_tab_id = active_tab_id();
-    if (!photon_browser_close_tab(m_state, tab_id))
-        return;
-
-    auto new_ids = QSet<uint64_t> {};
-    for (size_t i = 0; i < photon_browser_tab_count(m_state); ++i)
-        new_ids.insert(photon_browser_tab_id_at(m_state, i));
-    auto removed_ids = old_ids - new_ids;
-    auto active_changed = old_active_tab_id != active_tab_id();
-    sync_view_visibility();
-    if (active_changed)
-        emit active_tab_changed();
-
-    for (auto removed_id : removed_ids) {
-        auto* view = m_views.take(removed_id);
-        delete view;
-    }
-    emit_active_tab_state_changed();
+    apply_app_effects(dispatch_app_command(m_state, PhotonAppCommandKind_CloseTab, tab_id));
 }
 
 void BrowserView::reorder_tabs(QList<uint64_t> const& tab_ids)
 {
-    if (!photon_browser_reorder_tabs(m_state, tab_ids.constData(), static_cast<size_t>(tab_ids.size())))
-        return;
-    emit browser_state_changed();
+    apply_app_effects(dispatch_app_command(m_state, PhotonAppCommandKind_ReorderTabs, 0, &tab_ids));
 }
 
 void BrowserView::set_theme_mode(QString const& mode)
 {
     auto value = mode == QStringLiteral("light") ? 1 : mode == QStringLiteral("dark") ? 2 : 0;
-    if (!photon_browser_set_theme_mode(m_state, static_cast<uint8_t>(value)))
-        return;
-    refresh_preferred_color_scheme();
+    apply_app_effects(dispatch_app_command(m_state, PhotonAppCommandKind_SetTheme, static_cast<uint64_t>(value)));
 }
 
 void BrowserView::set_dim_overlays(bool enabled)
 {
-    if (!photon_browser_set_dim_overlays(m_state, enabled))
+    apply_app_effects(dispatch_app_command(m_state, PhotonAppCommandKind_SetDimOverlays, enabled));
+}
+
+void BrowserView::apply_app_effects(PhotonAppEffects const& effects)
+{
+    if (!effects.accepted)
         return;
-    emit browser_state_changed();
+    if (effects.created_tab_id != 0)
+        create_view(effects.created_tab_id);
+    if (effects.removed_tab_id != 0)
+        delete m_views.take(effects.removed_tab_id);
+    if (effects.tabs_changed)
+        sync_view_visibility();
+    if (effects.theme_changed)
+        refresh_preferred_color_scheme();
+    else if (effects.active_tab_changed) {
+        emit active_tab_changed();
+        emit_active_tab_state_changed();
+    } else if (effects.state_changed)
+        emit browser_state_changed();
 }
 
 void BrowserView::load_initial_url()

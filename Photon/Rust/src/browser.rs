@@ -141,10 +141,11 @@ impl BrowserState {
         self.active_tab_id
     }
 
-    pub(crate) fn tab_ids(&self) -> Vec<u64> {
-        self.tabs.iter().map(|tab| tab.id).collect()
+    pub(crate) fn contains_tab(&self, tab_id: u64) -> bool {
+        self.tab(tab_id).is_some()
     }
 
+    #[cfg(test)]
     pub(crate) fn tab_count(&self) -> usize {
         self.tabs.len()
     }

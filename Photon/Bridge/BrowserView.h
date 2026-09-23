@@ -14,6 +14,7 @@
 
 class QWidget;
 struct PhotonBrowserCommand;
+struct PhotonAppEffects;
 struct PhotonBrowserState;
 
 namespace Ladybird {
@@ -81,7 +82,7 @@ private:
     void update_navigation_capabilities(uint64_t tab_id);
     void emit_active_tab_state_changed();
     void sync_view_visibility();
-    uint64_t activate_created_tab(uint64_t tab_id);
+    void apply_app_effects(PhotonAppEffects const&);
 
     QWidget& m_host;
     QHash<uint64_t, Ladybird::WebContentView*> m_views;

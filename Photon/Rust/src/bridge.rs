@@ -6,6 +6,7 @@
 
 use std::{slice, str};
 
+use crate::application::{AppCommand, AppEffects, PhotonApp};
 use crate::browser::{BrowserCommand, BrowserState, NavigationCapabilities, ThemeMode};
 
 #[repr(C)]
@@ -29,8 +30,42 @@ pub struct PhotonBrowserCommand {
     pub argument: PhotonUtf8,
 }
 
+#[repr(C)]
+pub struct PhotonAppCommand {
+    pub kind: u32,
+    pub value: u64,
+    pub ids: *const u64,
+    pub ids_len: usize,
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub struct PhotonAppEffects {
+    pub accepted: u8,
+    pub state_changed: u8,
+    pub tabs_changed: u8,
+    pub active_tab_changed: u8,
+    pub theme_changed: u8,
+    pub created_tab_id: u64,
+    pub removed_tab_id: u64,
+}
+
+impl From<AppEffects> for PhotonAppEffects {
+    fn from(effects: AppEffects) -> Self {
+        Self {
+            accepted: effects.accepted.into(),
+            state_changed: effects.state_changed.into(),
+            tabs_changed: effects.tabs_changed.into(),
+            active_tab_changed: effects.active_tab_changed.into(),
+            theme_changed: effects.theme_changed.into(),
+            created_tab_id: effects.created_tab_id,
+            removed_tab_id: effects.removed_tab_id,
+        }
+    }
+}
+
 pub struct PhotonBrowserState {
-    browser: BrowserState,
+    app: PhotonApp,
     command_argument: String,
     snapshot_json: String,
 }
@@ -48,10 +83,50 @@ pub unsafe extern "C" fn photon_browser_state_new(
         .filter(|path| !path.is_empty())
         .map(std::path::Path::new);
     Box::into_raw(Box::new(PhotonBrowserState {
-        browser: config_path.map_or_else(BrowserState::initial, BrowserState::initial_with_config),
+        app: PhotonApp::new(config_path.map_or_else(BrowserState::initial, BrowserState::initial_with_config)),
         command_argument: String::new(),
         snapshot_json: String::new(),
     }))
+}
+
+/// Dispatches Photon application operations and returns typed integration effects.
+///
+/// # Safety
+/// `state` must be null or a live state returned by `photon_browser_state_new`. For reorder
+/// commands, `command.ids` must point to `ids_len` readable `u64` values for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn photon_app_dispatch(
+    state: *mut PhotonBrowserState,
+    command: PhotonAppCommand,
+) -> PhotonAppEffects {
+    // SAFETY: The caller guarantees the state pointer remains live for this call.
+    let Some(state) = (unsafe { state.as_mut() }) else {
+        return PhotonAppEffects::default();
+    };
+
+    let command = match command.kind {
+        1 => AppCommand::CreateTab,
+        2 => AppCommand::OpenSettings,
+        3 => AppCommand::SelectTab(command.value),
+        4 => AppCommand::CloseTab(command.value),
+        5 => {
+            // SAFETY: The caller guarantees this buffer remains live for this call.
+            let Some(ids) = (unsafe { input_ids(command.ids, command.ids_len) }) else {
+                return PhotonAppEffects::default();
+            };
+            AppCommand::ReorderTabs(ids)
+        }
+        6 => AppCommand::SetTheme(match command.value {
+            0 => ThemeMode::System,
+            1 => ThemeMode::Light,
+            2 => ThemeMode::Dark,
+            _ => return PhotonAppEffects::default(),
+        }),
+        7 => AppCommand::SetDimOverlays(command.value != 0),
+        _ => return PhotonAppEffects::default(),
+    };
+
+    state.app.dispatch(command).into()
 }
 
 /// # Safety
@@ -69,20 +144,20 @@ pub unsafe extern "C" fn photon_browser_state_free(state: *mut PhotonBrowserStat
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn photon_browser_url(state: *const PhotonBrowserState) -> PhotonUtf8 {
     // SAFETY: Native code keeps the state alive for the duration of this call.
-    borrowed_utf8(unsafe { state.as_ref() }.map(|state| state.browser.url()))
+    borrowed_utf8(unsafe { state.as_ref() }.map(|state| state.app.browser.url()))
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn photon_browser_title(state: *const PhotonBrowserState) -> PhotonUtf8 {
     // SAFETY: Native code keeps the state alive for the duration of this call.
-    borrowed_utf8(unsafe { state.as_ref() }.map(|state| state.browser.title()))
+    borrowed_utf8(unsafe { state.as_ref() }.map(|state| state.app.browser.title()))
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn photon_browser_loading(state: *const PhotonBrowserState) -> u8 {
     // SAFETY: Native code keeps the state alive for the duration of this call.
     unsafe { state.as_ref() }
-        .is_some_and(|state| state.browser.loading())
+        .is_some_and(|state| state.app.browser.loading())
         .into()
 }
 
@@ -90,7 +165,7 @@ pub unsafe extern "C" fn photon_browser_loading(state: *const PhotonBrowserState
 pub unsafe extern "C" fn photon_browser_can_go_back(state: *const PhotonBrowserState) -> u8 {
     // SAFETY: Native code keeps the state alive for the duration of this call.
     unsafe { state.as_ref() }
-        .is_some_and(|state| state.browser.can_go_back())
+        .is_some_and(|state| state.app.browser.can_go_back())
         .into()
 }
 
@@ -98,74 +173,38 @@ pub unsafe extern "C" fn photon_browser_can_go_back(state: *const PhotonBrowserS
 pub unsafe extern "C" fn photon_browser_can_go_forward(state: *const PhotonBrowserState) -> u8 {
     // SAFETY: Native code keeps the state alive for the duration of this call.
     unsafe { state.as_ref() }
-        .is_some_and(|state| state.browser.can_go_forward())
+        .is_some_and(|state| state.app.browser.can_go_forward())
         .into()
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn photon_browser_active_tab_id(state: *const PhotonBrowserState) -> u64 {
     // SAFETY: Native code keeps the state alive for the duration of this call.
-    unsafe { state.as_ref() }.map_or(0, |state| state.browser.active_tab_id())
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn photon_browser_tab_count(state: *const PhotonBrowserState) -> usize {
-    // SAFETY: Native code keeps the state alive for the duration of this call.
-    unsafe { state.as_ref() }.map_or(0, |state| state.browser.tab_count())
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn photon_browser_tab_id_at(state: *const PhotonBrowserState, index: usize) -> u64 {
-    // SAFETY: Native code keeps the state alive for the duration of this call.
-    unsafe { state.as_ref() }
-        .and_then(|state| state.browser.tab_ids().get(index).copied())
-        .unwrap_or(0)
+    unsafe { state.as_ref() }.map_or(0, |state| state.app.browser.active_tab_id())
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn photon_browser_adjacent_tab_id(state: *const PhotonBrowserState, previous: u8) -> u64 {
     // SAFETY: Native code keeps the state alive for the duration of this call.
-    unsafe { state.as_ref() }.map_or(0, |state| state.browser.adjacent_tab_id(previous != 0))
+    unsafe { state.as_ref() }.map_or(0, |state| state.app.browser.adjacent_tab_id(previous != 0))
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn photon_browser_is_internal_page(state: *const PhotonBrowserState) -> u8 {
     // SAFETY: Native code keeps the state alive for the duration of this call.
     unsafe { state.as_ref() }
-        .is_some_and(|state| state.browser.is_internal_page())
+        .is_some_and(|state| state.app.browser.is_internal_page())
         .into()
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn photon_browser_theme_mode(state: *const PhotonBrowserState) -> u8 {
     // SAFETY: Native code keeps the state alive for the duration of this call.
-    match unsafe { state.as_ref() }.map(|state| state.browser.theme_mode()) {
+    match unsafe { state.as_ref() }.map(|state| state.app.browser.theme_mode()) {
         Some(ThemeMode::Light) => 1,
         Some(ThemeMode::Dark) => 2,
         _ => 0,
     }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn photon_browser_set_theme_mode(state: *mut PhotonBrowserState, mode: u8) -> u8 {
-    // SAFETY: Native code keeps the state alive for the duration of this call.
-    let Some(state) = (unsafe { state.as_mut() }) else {
-        return 0;
-    };
-    let mode = match mode {
-        1 => ThemeMode::Light,
-        2 => ThemeMode::Dark,
-        _ => ThemeMode::System,
-    };
-    state.browser.set_theme_mode(mode).into()
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn photon_browser_set_dim_overlays(state: *mut PhotonBrowserState, enabled: u8) -> u8 {
-    // SAFETY: Native code keeps the state alive for the duration of this call.
-    unsafe { state.as_mut() }
-        .is_some_and(|state| state.browser.set_dim_overlays(enabled != 0))
-        .into()
 }
 
 #[unsafe(no_mangle)]
@@ -174,49 +213,8 @@ pub unsafe extern "C" fn photon_browser_tabs_json(state: *mut PhotonBrowserState
     let Some(state) = (unsafe { state.as_mut() }) else {
         return borrowed_utf8(None);
     };
-    state.snapshot_json = state.browser.snapshot_json();
+    state.snapshot_json = state.app.browser.snapshot_json();
     borrowed_utf8(Some(&state.snapshot_json))
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn photon_browser_create_tab(state: *mut PhotonBrowserState) -> u64 {
-    // SAFETY: Native code keeps the state alive for the duration of this call.
-    unsafe { state.as_mut() }.map_or(0, |state| state.browser.create_tab())
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn photon_browser_open_settings(state: *mut PhotonBrowserState) -> u64 {
-    // SAFETY: Native code keeps the state alive for the duration of this call.
-    unsafe { state.as_mut() }.map_or(0, |state| state.browser.open_settings())
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn photon_browser_select_tab(state: *mut PhotonBrowserState, tab_id: u64) -> u8 {
-    // SAFETY: Native code keeps the state alive for the duration of this call.
-    unsafe { state.as_mut() }
-        .is_some_and(|state| state.browser.select_tab(tab_id))
-        .into()
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn photon_browser_close_tab(state: *mut PhotonBrowserState, tab_id: u64) -> u8 {
-    // SAFETY: Native code keeps the state alive for the duration of this call.
-    unsafe { state.as_mut() }
-        .is_some_and(|state| state.browser.close_tab(tab_id))
-        .into()
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn photon_browser_reorder_tabs(
-    state: *mut PhotonBrowserState,
-    ids: *const u64,
-    len: usize,
-) -> u8 {
-    // SAFETY: Native code supplies a live state and an array valid for this call.
-    let (Some(state), Some(ids)) = (unsafe { state.as_mut() }, unsafe { input_ids(ids, len) }) else {
-        return 0;
-    };
-    state.browser.reorder_tabs(ids).into()
 }
 
 #[unsafe(no_mangle)]
@@ -253,14 +251,14 @@ pub unsafe extern "C" fn photon_browser_set_favicon(
         return 0;
     };
     let favicon_url = (!value.is_empty()).then_some(value);
-    state.browser.set_favicon(tab_id, favicon_url).into()
+    state.app.browser.set_favicon(tab_id, favicon_url).into()
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn photon_browser_set_loading(state: *mut PhotonBrowserState, tab_id: u64, loading: u8) -> u8 {
     // SAFETY: Native code keeps the state alive for the duration of this call.
     unsafe { state.as_mut() }
-        .is_some_and(|state| state.browser.set_loading(tab_id, loading != 0))
+        .is_some_and(|state| state.app.browser.set_loading(tab_id, loading != 0))
         .into()
 }
 
@@ -274,7 +272,7 @@ pub unsafe extern "C" fn photon_browser_set_navigation_capabilities(
     // SAFETY: Native code keeps the state alive for the duration of this call.
     unsafe { state.as_mut() }
         .is_some_and(|state| {
-            state.browser.set_navigation_capabilities(
+            state.app.browser.set_navigation_capabilities(
                 tab_id,
                 NavigationCapabilities {
                     can_go_back: can_go_back != 0,
@@ -296,7 +294,7 @@ pub unsafe extern "C" fn photon_browser_begin_navigation(
     let (Some(state), Some(url)) = (unsafe { state.as_mut() }, unsafe { input_utf8(data, len) }) else {
         return 0;
     };
-    state.browser.begin_navigation(tab_id, url).into()
+    state.app.browser.begin_navigation(tab_id, url).into()
 }
 
 #[unsafe(no_mangle)]
@@ -309,7 +307,7 @@ pub unsafe extern "C" fn photon_browser_prepare_navigate(
     let (Some(state), Some(input)) = (unsafe { state.as_mut() }, unsafe { input_utf8(data, len) }) else {
         return no_command();
     };
-    let Some(command) = state.browser.command_for_navigation(input) else {
+    let Some(command) = state.app.browser.command_for_navigation(input) else {
         return no_command();
     };
     prepare_command(state, command)
@@ -321,7 +319,7 @@ pub unsafe extern "C" fn photon_browser_prepare_reload(state: *mut PhotonBrowser
     let Some(state) = (unsafe { state.as_mut() }) else {
         return no_command();
     };
-    prepare_command(state, state.browser.reload_command())
+    prepare_command(state, state.app.browser.reload_command())
 }
 
 #[unsafe(no_mangle)]
@@ -360,7 +358,7 @@ unsafe fn prepare_optional_history_command(
     let Some(state) = (unsafe { state.as_mut() }) else {
         return no_command();
     };
-    command(&state.browser).map_or_else(no_command, |command| prepare_command(state, command))
+    command(&state.app.browser).map_or_else(no_command, |command| prepare_command(state, command))
 }
 
 unsafe fn update_string(
@@ -374,7 +372,7 @@ unsafe fn update_string(
     let (Some(state), Some(value)) = (unsafe { state.as_mut() }, unsafe { input_utf8(data, len) }) else {
         return 0;
     };
-    update(&mut state.browser, tab_id, value).into()
+    update(&mut state.app.browser, tab_id, value).into()
 }
 
 unsafe fn input_ids<'a>(ids: *const u64, len: usize) -> Option<&'a [u64]> {
