@@ -66,13 +66,13 @@
     --photon-chrome-height: calc(var(--photon-titlebar-height) + var(--photon-toolbar-height));
     --photon-page-inset: 4px;
     --photon-page-radius: 6px;
+    --photon-page-frame-radius: calc(var(--photon-page-radius) + var(--photon-page-inset));
     --photon-control-size: 28px;
     --photon-tab-height: 29px;
     --photon-tab-min-width: 82px;
     --photon-tab-max-width: 238px;
     --photon-tab-default-width: 190px;
     --photon-tab-close-size: 22px;
-    --photon-address-min-width: 90px;
     --photon-address-height: 32px;
     --photon-address-input-height: 30px;
     --photon-site-info-control-size: 24px;
@@ -81,13 +81,12 @@
     --photon-menu-width: 224px;
     --photon-menu-padding: var(--photon-space-2);
     --photon-menu-item-height: 32px;
-    --photon-menu-item-gap: var(--photon-space-5);
     --photon-popover-max-height: calc(100vh - var(--photon-space-8));
     --photon-content-width: 560px;
     --photon-settings-width: 680px;
     --photon-security-popover-width: 320px;
-    --photon-new-tab-lift: 8vh;
     --photon-content-gutter: var(--photon-space-12);
+    --photon-toolbar-gutter: var(--photon-space-5);
     --photon-color-tab-hover: color-mix(in srgb, var(--photon-color-surface-raised) 42%, transparent);
     --photon-opacity-disabled: 0.42;
     --photon-scale-popover-enter: 0.98;
@@ -227,7 +226,32 @@ button {
     z-index: 0;
     inset: var(--photon-chrome-height) 0 0;
     border: var(--photon-page-inset) solid var(--photon-color-canvas);
-    border-radius: calc(var(--photon-page-radius) + var(--photon-page-inset));
+    background:
+        radial-gradient(
+            circle at bottom right,
+            transparent calc(var(--photon-page-radius) - 1px),
+            var(--photon-color-canvas) calc(var(--photon-page-radius) + 1px)
+        )
+        top left / var(--photon-page-frame-radius) var(--photon-page-frame-radius) no-repeat,
+        radial-gradient(
+            circle at bottom left,
+            transparent calc(var(--photon-page-radius) - 1px),
+            var(--photon-color-canvas) calc(var(--photon-page-radius) + 1px)
+        )
+        top right / var(--photon-page-frame-radius) var(--photon-page-frame-radius) no-repeat,
+        radial-gradient(
+            circle at top right,
+            transparent calc(var(--photon-page-radius) - 1px),
+            var(--photon-color-canvas) calc(var(--photon-page-radius) + 1px)
+        )
+        bottom left / var(--photon-page-frame-radius) var(--photon-page-frame-radius) no-repeat,
+        radial-gradient(
+            circle at top left,
+            transparent calc(var(--photon-page-radius) - 1px),
+            var(--photon-color-canvas) calc(var(--photon-page-radius) + 1px)
+        )
+        bottom right / var(--photon-page-frame-radius) var(--photon-page-frame-radius) no-repeat;
+    background-origin: border-box;
     pointer-events: none;
 }
 
@@ -289,7 +313,7 @@ button {
 
 .photon-tab-strip {
     width: 100%;
-    gap: var(--photon-space-3);
+    gap: var(--photon-space-2);
     flex: 1;
 }
 
@@ -297,7 +321,7 @@ button {
     flex: 0 1 auto;
     width: max-content;
     max-width: calc(100% - var(--photon-control-size) - var(--photon-space-2));
-    gap: var(--photon-space-2);
+    gap: var(--photon-space-1);
     overflow: hidden;
 }
 
@@ -333,9 +357,9 @@ button {
     height: var(--photon-tab-height);
     flex: 1 1 auto;
     align-items: center;
-    gap: var(--photon-space-4);
+    gap: var(--photon-space-3);
     overflow: hidden;
-    padding-inline: var(--photon-space-5) var(--photon-space-14);
+    padding-inline: var(--photon-space-4) calc(var(--photon-tab-close-size) + var(--photon-space-2));
     border: var(--photon-border-width) solid transparent;
     border-radius: var(--photon-radius-control);
     background: transparent;
@@ -525,6 +549,17 @@ button {
     height: var(--photon-control-size);
 }
 
+.photon-window-control > .lucide {
+    width: 11px;
+    height: 11px;
+    stroke-width: 1.75;
+}
+
+.photon-window-control > .lucide-square {
+    width: 13px;
+    height: 13px;
+}
+
 .photon-window-close:hover:not([aria-disabled="true"]):not(:disabled) {
     background: #d92d20;
     color: white;
@@ -535,8 +570,8 @@ button {
     height: var(--photon-toolbar-height);
     min-width: 0;
     align-items: center;
-    gap: var(--photon-space-3);
-    padding: var(--photon-space-1) var(--photon-space-5);
+    gap: var(--photon-space-2);
+    padding: var(--photon-space-1) var(--photon-toolbar-gutter);
     background: var(--photon-color-canvas);
     pointer-events: auto;
 }
@@ -556,7 +591,7 @@ button {
 
 .photon-omnibox {
     display: flex;
-    min-width: var(--photon-address-min-width);
+    min-width: 0;
     height: var(--photon-address-height);
     flex: 1 1 auto;
     align-items: center;
@@ -650,8 +685,8 @@ button {
     min-height: var(--photon-menu-item-height);
     grid-template-columns: var(--photon-icon-size-md) minmax(0, 1fr) auto;
     align-items: center;
-    column-gap: var(--photon-menu-item-gap);
-    padding-inline: var(--photon-space-5);
+    column-gap: var(--photon-space-4);
+    padding-inline: var(--photon-space-4);
     border: 0;
     border-radius: var(--photon-radius-control);
     background: transparent;
@@ -717,8 +752,8 @@ button {
 .photon-security-row {
     display: flex;
     align-items: center;
-    gap: var(--photon-space-5);
-    padding: var(--photon-space-6) var(--photon-border-width) var(--photon-space-2);
+    gap: var(--photon-space-4);
+    padding: var(--photon-space-4) var(--photon-border-width) var(--photon-space-2);
     font-size: var(--photon-font-size-ui);
 }
 
@@ -754,8 +789,7 @@ button {
     display: grid;
     width: min(var(--photon-content-width), calc(100% - (2 * var(--photon-content-gutter))));
     justify-items: center;
-    gap: var(--photon-space-12);
-    transform: translateY(calc(-1 * var(--photon-new-tab-lift)));
+    gap: var(--photon-space-8);
 }
 
 .photon-new-tab-brand {
@@ -783,13 +817,13 @@ button {
 .photon-settings-content {
     width: min(var(--photon-settings-width), calc(100% - (2 * var(--photon-content-gutter))));
     margin: 0 auto;
-    padding-block: var(--photon-space-20) var(--photon-space-32);
+    padding-block: var(--photon-space-16) var(--photon-space-24);
 }
 
 .photon-settings-heading {
     display: grid;
     gap: var(--photon-space-4);
-    margin-block-end: var(--photon-space-14);
+    margin-block-end: var(--photon-space-10);
 }
 
 .photon-settings-heading h1 {
@@ -819,8 +853,8 @@ button {
 
 .photon-settings-group {
     display: grid;
-    gap: var(--photon-space-12);
-    padding: var(--photon-space-12);
+    gap: var(--photon-space-8);
+    padding: var(--photon-space-10);
 }
 
 .photon-settings-group + .photon-settings-group {
@@ -838,7 +872,7 @@ button {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--photon-space-8);
+    gap: var(--photon-space-6);
     cursor: pointer;
 }
 
@@ -926,9 +960,29 @@ button {
 }
 
 @media (max-width: 650px) {
+    :root {
+        --photon-toolbar-gutter: var(--photon-space-3);
+        --photon-content-gutter: var(--photon-space-8);
+        --photon-settings-control-min-width: 104px;
+    }
+
+    .photon-navigation-controls {
+        gap: 0;
+    }
+
     .photon-settings-group-header {
         align-items: flex-start;
         flex-direction: column;
+    }
+}
+
+@media (max-height: 520px) {
+    .photon-new-tab-content {
+        gap: var(--photon-space-4);
+    }
+
+    .photon-settings-content {
+        padding-block: var(--photon-space-8) var(--photon-space-12);
     }
 }
 
