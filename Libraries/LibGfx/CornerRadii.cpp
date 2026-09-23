@@ -54,6 +54,7 @@ ErrorOr<void> encode(Encoder& encoder, Gfx::CornerRadius const& radius)
 {
     TRY(encoder.encode(radius.horizontal_radius));
     TRY(encoder.encode(radius.vertical_radius));
+    TRY(encoder.encode(radius.shape_milli));
     return {};
 }
 
@@ -63,6 +64,7 @@ ErrorOr<Gfx::CornerRadius> decode(Decoder& decoder)
     return Gfx::CornerRadius {
         .horizontal_radius = TRY(decoder.decode<int>()),
         .vertical_radius = TRY(decoder.decode<int>()),
+        .shape_milli = TRY(decoder.decode<int>()),
     };
 }
 

@@ -408,6 +408,8 @@ public:
     Function<void()> on_link_unhover;
     Function<void(Utf16String const&)> on_title_change;
     Function<void(URL::URL const&)> on_url_change;
+    // Return true when the embedder handled and canceled a top-level navigation request.
+    Function<bool(URL::URL const&)> on_navigation_request;
     Function<void()> on_load_start;
     Function<void(URL::URL const&)> on_load_finish;
     Function<void(bool)> on_loading_state_change;

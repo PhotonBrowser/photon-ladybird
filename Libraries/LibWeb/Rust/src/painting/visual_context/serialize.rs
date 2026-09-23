@@ -138,6 +138,7 @@ impl TreeByteWriter {
     fn corner_radius(&mut self, radius: CornerRadius) {
         self.i32(radius.horizontal_radius);
         self.i32(radius.vertical_radius);
+        self.i32(radius.shape_milli);
     }
     fn corner_radii(&mut self, radii: CornerRadii) {
         self.corner_radius(radii.top_left);
@@ -252,6 +253,7 @@ impl<'a> TreeByteReader<'a> {
         Some(CornerRadius {
             horizontal_radius: self.i32()?,
             vertical_radius: self.i32()?,
+            shape_milli: self.i32()?,
         })
     }
     fn corner_radii(&mut self) -> Option<CornerRadii> {

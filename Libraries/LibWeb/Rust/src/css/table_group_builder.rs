@@ -1820,6 +1820,26 @@ unsafe fn build_border_group(
                 payload.border_top_left_radius = retained(property_id::BORDER_TOP_LEFT_RADIUS);
                 payload.border_top_right_radius = retained(property_id::BORDER_TOP_RIGHT_RADIUS);
                 payload.has_noninitial_border_radii = has_noninitial_border_radii;
+                payload.corner_top_left_shape = required_number(
+                    values
+                        .value(property_id::CORNER_TOP_LEFT_SHAPE)
+                        .expect("corner-top-left-shape has a computed value"),
+                );
+                payload.corner_top_right_shape = required_number(
+                    values
+                        .value(property_id::CORNER_TOP_RIGHT_SHAPE)
+                        .expect("corner-top-right-shape has a computed value"),
+                );
+                payload.corner_bottom_right_shape = required_number(
+                    values
+                        .value(property_id::CORNER_BOTTOM_RIGHT_SHAPE)
+                        .expect("corner-bottom-right-shape has a computed value"),
+                );
+                payload.corner_bottom_left_shape = required_number(
+                    values
+                        .value(property_id::CORNER_BOTTOM_LEFT_SHAPE)
+                        .expect("corner-bottom-left-shape has a computed value"),
+                );
                 payload.border_image_source = retained(property_id::BORDER_IMAGE_SOURCE);
                 payload.border_image_slice = retained(property_id::BORDER_IMAGE_SLICE);
                 payload.border_image_width = retained(property_id::BORDER_IMAGE_WIDTH);
@@ -2865,6 +2885,7 @@ fn required_integer(data: &StyleValueData) -> i32 {
 fn required_number(data: &StyleValueData) -> f64 {
     match data {
         StyleValueData::Number { value } => *value,
+        StyleValueData::Superellipse { parameter } => required_number(parameter.data()),
         data @ StyleValueData::Calculated { .. } => crate::css::calc::resolve_calculated_number_without_context(data)
             .expect("a computed number calculation resolves without context"),
         _ => unreachable!("a computed number slot holds a number or a calculation"),

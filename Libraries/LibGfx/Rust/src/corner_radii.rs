@@ -11,6 +11,8 @@ use crate::geometry::{FloatPoint, FloatRect, IntPoint, IntRect};
 pub struct CornerRadius {
     pub horizontal_radius: i32,
     pub vertical_radius: i32,
+    /// CSS `corner-*-shape` superellipse parameter; 1 is the usual ellipse and 2 is a squircle.
+    pub shape_milli: i32,
 }
 
 impl CornerRadius {
@@ -39,6 +41,7 @@ impl CornerRadii {
         let corner = CornerRadius {
             horizontal_radius: radius,
             vertical_radius: radius,
+            shape_milli: 1000,
         };
         Self {
             top_left: corner,
@@ -60,7 +63,8 @@ impl CornerRadii {
         let outside_ellipse = |r: CornerRadius, cx: i32, cy: i32| {
             let dx = (px - cx) as f32 / r.horizontal_radius as f32;
             let dy = (py - cy) as f32 / r.vertical_radius as f32;
-            dx * dx + dy * dy > 1.0
+            let exponent = 2.0f32.powf(r.shape_milli as f32 / 1000.0);
+            dx.abs().powf(exponent) + dy.abs().powf(exponent) > 1.0
         };
         if self.top_left.is_present() {
             let cx = rect.x + self.top_left.horizontal_radius;
@@ -105,7 +109,8 @@ impl CornerRadii {
         let outside_ellipse = |r: CornerRadius, cx: f32, cy: f32| {
             let dx = (px - cx) / r.horizontal_radius as f32;
             let dy = (py - cy) / r.vertical_radius as f32;
-            dx * dx + dy * dy > 1.0
+            let exponent = 2.0f32.powf(r.shape_milli as f32 / 1000.0);
+            dx.abs().powf(exponent) + dy.abs().powf(exponent) > 1.0
         };
         if self.top_left.is_present() {
             let cx = rect.x + self.top_left.horizontal_radius as f32;

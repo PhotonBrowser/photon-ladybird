@@ -21,6 +21,7 @@ enum class CornerClip {
 struct CornerRadius {
     int horizontal_radius { 0 };
     int vertical_radius { 0 };
+    int shape_milli { 1000 };
 
     inline operator bool() const
     {

@@ -369,7 +369,7 @@ pub(crate) fn border_radii_data(
         border_box.width,
         border_box.height,
     );
-    crate::painting::border_radii::normalize_border_radii_data(
+    let mut radii = crate::painting::border_radii::normalize_border_radii_data(
         border_rect,
         border_rect,
         [
@@ -378,7 +378,20 @@ pub(crate) fn border_radii_data(
             border_radius_pair(&border.border_bottom_right_radius),
             border_radius_pair(&border.border_bottom_left_radius),
         ],
-    )
+    );
+    let shapes = corner_shapes(style);
+    radii.shapes = shapes.map(|shape| (shape * 1000.0).round() as i32);
+    radii
+}
+
+pub(crate) fn corner_shapes(style: ComputedValuesView<'_>) -> [f64; 4] {
+    let border = style.border();
+    [
+        border.corner_top_left_shape,
+        border.corner_top_right_shape,
+        border.corner_bottom_right_shape,
+        border.corner_bottom_left_shape,
+    ]
 }
 
 pub(crate) fn padding_edge_border_radii(
@@ -423,6 +436,7 @@ pub(crate) fn piece_border_radii_data(
             border_radius_pair(&border.border_bottom_left_radius),
         ],
     );
+    radii.shapes = corner_shapes(style).map(|shape| (shape * 1000.0).round() as i32);
     // A corner only keeps its radius when the fragment piece retains both of the box's edges
     // meeting there; corners cut by fragmentation are square.
     const TOP_EDGE: u8 = 1 << 0;

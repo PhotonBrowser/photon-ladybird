@@ -16,6 +16,7 @@
 #include <core/SkColorSpace.h>
 #include <core/SkMaskFilter.h>
 #include <core/SkPath.h>
+#include <core/SkPathBuilder.h>
 #include <core/SkPathEffect.h>
 #include <core/SkPicture.h>
 #include <core/SkPictureRecorder.h>
@@ -112,9 +113,51 @@ static SkRRect to_skia_rrect(auto const& rect, Gfx::CornerRadii const& corner_ra
     return rrect;
 }
 
+static SkPath to_skia_corner_path(auto const& rect, Gfx::CornerRadii const& radii)
+{
+    auto const left = static_cast<float>(rect.x());
+    auto const top = static_cast<float>(rect.y());
+    auto const right = static_cast<float>(rect.right());
+    auto const bottom = static_cast<float>(rect.bottom());
+    SkPathBuilder path;
+    path.moveTo(left + radii.top_left.horizontal_radius, top);
+    path.lineTo(right - radii.top_right.horizontal_radius, top);
+
+    auto append_corner = [&](Gfx::CornerRadius const& radius, float cx, float cy, float start, float end) {
+        if (!radius)
+            return;
+        auto exponent = exp2f(static_cast<float>(radius.shape_milli) / 1000.0f);
+        for (int step = 1; step <= 64; ++step) {
+            auto angle = start + (end - start) * step / 64.0f;
+            auto cosine = cosf(angle);
+            auto sine = sinf(angle);
+            auto x = copysignf(powf(abs(cosine), 2.0f / exponent), cosine);
+            auto y = copysignf(powf(abs(sine), 2.0f / exponent), sine);
+            path.lineTo(cx + x * radius.horizontal_radius, cy + y * radius.vertical_radius);
+        }
+    };
+
+    append_corner(radii.top_right, right - radii.top_right.horizontal_radius, top + radii.top_right.vertical_radius, -AK::Pi<float> / 2, 0);
+    path.lineTo(right, bottom - radii.bottom_right.vertical_radius);
+    append_corner(radii.bottom_right, right - radii.bottom_right.horizontal_radius, bottom - radii.bottom_right.vertical_radius, 0, AK::Pi<float> / 2);
+    path.lineTo(left + radii.bottom_left.horizontal_radius, bottom);
+    append_corner(radii.bottom_left, left + radii.bottom_left.horizontal_radius, bottom - radii.bottom_left.vertical_radius, AK::Pi<float> / 2, AK::Pi<float>);
+    path.lineTo(left, top + radii.top_left.vertical_radius);
+    append_corner(radii.top_left, left + radii.top_left.horizontal_radius, top + radii.top_left.vertical_radius, AK::Pi<float>, AK::Pi<float> * 1.5f);
+    path.close();
+    return path.detach();
+}
+
+static bool has_superellipse_corner(Gfx::CornerRadii const& radii)
+{
+    return radii.top_left.shape_milli != 1000 || radii.top_right.shape_milli != 1000 || radii.bottom_right.shape_milli != 1000 || radii.bottom_left.shape_milli != 1000;
+}
+
 static void clip_to_rounded_rect(SkCanvas& canvas, auto const& rect, Gfx::CornerRadii const& corner_radii, SkClipOp clip_op)
 {
-    if (corner_radii.has_any_radius())
+    if (has_superellipse_corner(corner_radii))
+        canvas.clipPath(to_skia_corner_path(rect, corner_radii), clip_op, true);
+    else if (corner_radii.has_any_radius())
         canvas.clipRRect(to_skia_rrect(rect, corner_radii), clip_op, true);
     else
         canvas.clipRect(to_skia_rect(rect), clip_op, true);
@@ -753,17 +796,20 @@ void DisplayListPlayerSkia::play_command(PaintLinearGradient const& command)
 
 void DisplayListPlayerSkia::play_command(PaintOuterBoxShadow const& command)
 {
-    auto content_rrect = to_skia_rrect(command.device_content_rect, command.content_corner_radii);
-
     auto& canvas = surface().canvas();
     canvas.save();
-    canvas.clipRRect(content_rrect, SkClipOp::kDifference, true);
+    if (has_superellipse_corner(command.content_corner_radii))
+        canvas.clipPath(to_skia_corner_path(command.device_content_rect, command.content_corner_radii), SkClipOp::kDifference, true);
+    else
+        canvas.clipRRect(to_skia_rrect(command.device_content_rect, command.content_corner_radii), SkClipOp::kDifference, true);
     SkPaint paint;
     paint.setAntiAlias(true);
     paint.setColor(to_skia_color(command.color));
     paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, command.blur_radius / 2));
-    auto shadow_rounded_rect = to_skia_rrect(command.shadow_rect, command.shadow_corner_radii);
-    canvas.drawRRect(shadow_rounded_rect, paint);
+    if (has_superellipse_corner(command.shadow_corner_radii))
+        canvas.drawPath(to_skia_corner_path(command.shadow_rect, command.shadow_corner_radii), paint);
+    else
+        canvas.drawRRect(to_skia_rrect(command.shadow_rect, command.shadow_corner_radii), paint);
     canvas.restore();
 }
 
@@ -772,8 +818,12 @@ void DisplayListPlayerSkia::play_command(PaintInnerBoxShadow const& command)
     auto outer_rect = to_skia_rrect(command.outer_shadow_rect, command.content_corner_radii);
     auto inner_rect = to_skia_rrect(command.inner_shadow_rect, command.inner_shadow_corner_radii);
 
-    auto outer_path = SkPath::RRect(outer_rect);
-    auto inner_path = SkPath::RRect(inner_rect);
+    auto outer_path = has_superellipse_corner(command.content_corner_radii)
+        ? to_skia_corner_path(command.outer_shadow_rect, command.content_corner_radii)
+        : SkPath::RRect(outer_rect);
+    auto inner_path = has_superellipse_corner(command.inner_shadow_corner_radii)
+        ? to_skia_corner_path(command.inner_shadow_rect, command.inner_shadow_corner_radii)
+        : SkPath::RRect(inner_rect);
 
     auto result = Op(outer_path, inner_path, SkPathOp::kDifference_SkPathOp);
     if (!result.has_value()) {
@@ -787,7 +837,10 @@ void DisplayListPlayerSkia::play_command(PaintInnerBoxShadow const& command)
     path_paint.setColor(to_skia_color(command.color));
     path_paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, command.blur_radius / 2));
     canvas.save();
-    canvas.clipRRect(to_skia_rrect(command.device_content_rect, command.content_corner_radii), true);
+    if (has_superellipse_corner(command.content_corner_radii))
+        canvas.clipPath(to_skia_corner_path(command.device_content_rect, command.content_corner_radii), true);
+    else
+        canvas.clipRRect(to_skia_rrect(command.device_content_rect, command.content_corner_radii), true);
     canvas.drawPath(result_path, path_paint);
     canvas.restore();
 }
@@ -827,8 +880,10 @@ void DisplayListPlayerSkia::play_command(FillRectWithRoundedCorners const& comma
     paint.setColor(to_skia_color(color));
     paint.setAntiAlias(true);
 
-    auto rounded_rect = to_skia_rrect(rect, command.corner_radii);
-    canvas.drawRRect(rounded_rect, paint);
+    if (has_superellipse_corner(command.corner_radii))
+        canvas.drawPath(to_skia_corner_path(rect, command.corner_radii), paint);
+    else
+        canvas.drawRRect(to_skia_rrect(rect, command.corner_radii), paint);
 }
 
 void DisplayListPlayerSkia::play_command(FillRoundedRectRing const& command)
@@ -851,6 +906,7 @@ void DisplayListPlayerSkia::play_command(FillRoundedRectRing const& command)
     };
 
     auto outer_rounded_rect = to_skia_rrect(rect, command.corner_radii);
+    auto has_superellipse = has_superellipse_corner(command.corner_radii);
     // Without curved corners the ring is four bands, which Skia batches as plain rects. Their shared
     // edges only stay invisible while they land on whole device pixels, so any other canvas transform
     // takes the single-draw route below, which resolves coverage once for the whole ring.
@@ -871,7 +927,10 @@ void DisplayListPlayerSkia::play_command(FillRoundedRectRing const& command)
     }
 
     if (inner_rect.is_empty()) {
-        canvas.drawRRect(outer_rounded_rect, paint);
+        if (has_superellipse)
+            canvas.drawPath(to_skia_corner_path(rect, command.corner_radii), paint);
+        else
+            canvas.drawRRect(outer_rounded_rect, paint);
         return;
     }
 
@@ -881,6 +940,7 @@ void DisplayListPlayerSkia::play_command(FillRoundedRectRing const& command)
         return Gfx::CornerRadius {
             max(outer_corner.horizontal_radius - horizontal_edge_width, 0),
             max(outer_corner.vertical_radius - vertical_edge_width, 0),
+            outer_corner.shape_milli,
         };
     };
     Gfx::CornerRadii inner_corner_radii {
@@ -889,6 +949,13 @@ void DisplayListPlayerSkia::play_command(FillRoundedRectRing const& command)
         inner_corner(command.corner_radii.bottom_right, right_width, bottom_width),
         inner_corner(command.corner_radii.bottom_left, left_width, bottom_width),
     };
+    if (has_superellipse) {
+        SkPathBuilder ring_path(SkPathFillType::kEvenOdd);
+        ring_path.addPath(to_skia_corner_path(rect, command.corner_radii));
+        ring_path.addPath(to_skia_corner_path(inner_rect, inner_corner_radii));
+        canvas.drawPath(ring_path.detach(), paint);
+        return;
+    }
     canvas.drawDRRect(outer_rounded_rect, to_skia_rrect(inner_rect, inner_corner_radii), paint);
 }
 

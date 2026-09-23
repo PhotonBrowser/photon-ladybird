@@ -98,7 +98,8 @@ ffi_bytes_fields!(AffineTransform { values });
 ffi_bytes_fields!(FloatMatrix4x4 { elements });
 ffi_bytes_fields!(CornerRadius {
     horizontal_radius,
-    vertical_radius
+    vertical_radius,
+    shape_milli
 });
 ffi_bytes_fields!(CornerRadii {
     top_left,

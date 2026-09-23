@@ -546,7 +546,7 @@ ffi_bytes_fields!(DisplayListInlineClip {
     mode
 });
 pub const INLINE_CLIP_ENTRY_SIZE: usize = std::mem::size_of::<DisplayListInlineClip>();
-const _: () = assert!(INLINE_CLIP_ENTRY_SIZE == 64);
+const _: () = assert!(INLINE_CLIP_ENTRY_SIZE == 80);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(C)]

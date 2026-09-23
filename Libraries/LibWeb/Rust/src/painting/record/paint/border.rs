@@ -1103,6 +1103,7 @@ fn paint_uniform_solid_border(
     let inner_corner = |corner: CornerRadius, horizontal_inset: i32, vertical_inset: i32| CornerRadius {
         horizontal_radius: (corner.horizontal_radius - horizontal_inset).max(0),
         vertical_radius: (corner.vertical_radius - vertical_inset).max(0),
+        shape_milli: corner.shape_milli,
     };
     let inner_corner_radii = CornerRadii {
         top_left: inner_corner(corner_radii.top_left, left_inset, top_inset),
@@ -1338,6 +1339,7 @@ pub(crate) fn edge_geometries(
     let zero = CornerRadius {
         horizontal_radius: 0,
         vertical_radius: 0,
+        shape_milli: 1000,
     };
 
     // Disable border radii if the corresponding borders don't exist:
