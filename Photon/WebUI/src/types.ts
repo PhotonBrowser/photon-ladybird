@@ -42,7 +42,7 @@ export interface PhotonTabs {
 }
 
 export interface PhotonUi {
-    setCaptureRegion(name: BrowserOverlay, open: boolean): void;
+    setCaptureRegion(name: "site-info" | "browser-menu", open: boolean): void;
 }
 
 export interface PhotonSettings {

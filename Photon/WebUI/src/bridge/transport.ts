@@ -61,5 +61,11 @@ function serializeCommand(command: PhotonCommand): { name: string; value?: strin
         case "new-tab":
         case "open-settings":
             return { name: command.kind };
+        default:
+            return assertNever(command);
     }
+}
+
+function assertNever(value: never): never {
+    throw new Error(`Unhandled Photon command: ${JSON.stringify(value)}`);
 }
