@@ -8,7 +8,10 @@
 
 #include <AK/Function.h>
 
+#include <LibURL/URL.h>
+
 #include <QObject>
+#include <QUrl>
 
 class QWidget;
 
@@ -30,13 +33,18 @@ public:
 
     Ladybird::WebContentView& view() { return *m_view; }
     void load(BrowserView const& browser);
+    void update_state(BrowserView const& browser);
+    void focus_address_bar();
 
     Function<void(QString const&, QString const&)> on_command;
 
 private:
-    void handle_url_change(QString const& url);
+    bool is_allowed_command(QUrl const&, QString&, QString&) const;
+    bool handle_navigation_request(URL::URL const&);
 
     Ladybird::WebContentView* m_view { nullptr };
+    QUrl m_dev_server_origin;
+    bool m_trusted_document_loaded { false };
 };
 
 }

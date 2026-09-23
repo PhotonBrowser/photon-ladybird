@@ -8,6 +8,8 @@
 
 #include <QObject>
 #include <QString>
+#include <QHash>
+#include <cstdint>
 
 class QWidget;
 struct PhotonBrowserCommand;
@@ -38,13 +40,23 @@ public:
     bool loading() const;
     bool can_go_back() const;
     bool can_go_forward() const;
-    Ladybird::WebContentView& widget() const { return *m_view; }
+    Ladybird::WebContentView& widget() const;
+    uint64_t active_tab_id() const;
+    QString tabs_json() const;
+    bool is_internal_page() const;
 
     Q_INVOKABLE bool navigate(QString const& input);
     Q_INVOKABLE void reload();
     Q_INVOKABLE void go_back();
     Q_INVOKABLE void go_forward();
     Q_INVOKABLE void focus_web_content();
+    Q_INVOKABLE uint64_t create_tab();
+    Q_INVOKABLE uint64_t open_settings();
+    Q_INVOKABLE void select_tab(uint64_t tab_id);
+    void select_adjacent_tab(bool previous);
+    Q_INVOKABLE void close_tab(uint64_t tab_id);
+    Q_INVOKABLE void reorder_tabs(QList<uint64_t> const& tab_ids);
+    void set_theme_mode(QString const& mode);
     void load_initial_url();
 
 signals:
@@ -52,17 +64,24 @@ signals:
     void title_changed();
     void loading_changed();
     void navigation_capabilities_changed();
+    void cursor_changed();
+    void browser_state_changed();
+    void active_tab_changed();
 
 private:
     bool apply_command(PhotonBrowserCommand const&);
-    void update_url(QString const&);
-    void update_title(QString const&);
-    void update_loading(bool);
-    void update_navigation_capabilities();
+    Ladybird::WebContentView& create_view(uint64_t tab_id);
+    void update_url(uint64_t tab_id, QString const&);
+    void update_title(uint64_t tab_id, QString const&);
+    void update_loading(uint64_t tab_id, bool);
+    void update_navigation_capabilities(uint64_t tab_id);
+    void emit_active_tab_state_changed();
+    void sync_view_visibility();
+    uint64_t activate_created_tab(uint64_t tab_id);
 
-    // The host owns this QWidget child; the destructor deletes it before releasing callback state.
-    Ladybird::WebContentView* m_view { nullptr };
-    // Opaque and uniquely owned here. No Ladybird pointer crosses into Rust.
+    QWidget& m_host;
+    QHash<uint64_t, Ladybird::WebContentView*> m_views;
+    // Opaque Rust state owns all tab identity and browser-facing state.
     PhotonBrowserState* m_state { nullptr };
 };
 

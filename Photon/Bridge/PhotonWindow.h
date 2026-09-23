@@ -32,8 +32,10 @@ public:
 protected:
     virtual void closeEvent(QCloseEvent*) override;
     virtual void resizeEvent(QResizeEvent*) override;
+    virtual bool eventFilter(QObject*, QEvent*) override;
 
 private:
+    void install_web_shortcuts();
     void update_web_surface_geometry();
 
     std::unique_ptr<BrowserView> m_browser;

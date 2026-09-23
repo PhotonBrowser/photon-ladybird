@@ -56,7 +56,10 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
 
     application->set_active_view(window.browser().widget());
     window.show();
-    window.browser().load_initial_url();
+    if (qml_ui)
+        window.browser().navigate(QStringLiteral("https://example.com"));
+    else
+        window.browser().load_initial_url();
 
     return application->execute();
 }
