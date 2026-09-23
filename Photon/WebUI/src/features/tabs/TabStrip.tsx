@@ -112,7 +112,7 @@ export function TabStrip({ api, tabs, activeTabId }: TabStripProps): React.JSX.E
                         variant="ghost"
                         onPress={api.window.minimize}
                     >
-                        <Minus aria-hidden="true" />
+                        <Minus aria-hidden="true" className="photon-window-icon photon-window-minimize-icon" />
                     </IconButton>
                     <IconButton
                         ariaLabel="Maximize or restore window"
@@ -121,7 +121,7 @@ export function TabStrip({ api, tabs, activeTabId }: TabStripProps): React.JSX.E
                         variant="ghost"
                         onPress={api.window.toggleMaximize}
                     >
-                        <Square aria-hidden="true" />
+                        <Square aria-hidden="true" className="photon-window-icon photon-window-maximize-icon" />
                     </IconButton>
                     <IconButton
                         ariaLabel="Close window"
@@ -130,7 +130,7 @@ export function TabStrip({ api, tabs, activeTabId }: TabStripProps): React.JSX.E
                         variant="ghost"
                         onPress={api.window.close}
                     >
-                        <X aria-hidden="true" />
+                        <X aria-hidden="true" className="photon-window-icon photon-window-close-icon" />
                     </IconButton>
                 </div>
             )}

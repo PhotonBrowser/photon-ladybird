@@ -549,15 +549,22 @@ button {
     height: var(--photon-control-size);
 }
 
-.photon-window-control > .lucide {
-    width: 11px;
-    height: 11px;
-    stroke-width: 1.75;
+.photon-window-icon {
+    stroke-width: 3;
 }
 
-.photon-window-control > .lucide-square {
-    width: 13px;
-    height: 13px;
+.photon-window-minimize-icon {
+    width: 16px;
+    height: 16px;
+}
+.photon-window-close-icon {
+    width: 16px;
+    height: 16px;
+}
+
+.photon-window-maximize-icon {
+    width: 14px;
+    height: 14px;
 }
 
 .photon-window-close:hover:not([aria-disabled="true"]):not(:disabled) {
