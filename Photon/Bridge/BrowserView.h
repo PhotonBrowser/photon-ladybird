@@ -9,6 +9,7 @@
 #include <LibWeb/CSS/PreferredColorScheme.h>
 #include <QHash>
 #include <QObject>
+#include <QPoint>
 #include <QString>
 #include <cstdint>
 
@@ -72,6 +73,8 @@ signals:
     void loading_changed();
     void navigation_capabilities_changed();
     void cursor_changed();
+    void page_tooltip_changed(QString text, QPoint position);
+    void page_tooltip_cleared();
     void browser_state_changed();
     void active_tab_changed();
 

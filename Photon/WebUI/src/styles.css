@@ -233,6 +233,27 @@ button {
     pointer-events: auto;
 }
 
+.photon-page-tooltip {
+    position: fixed;
+    z-index: 4;
+    max-width: min(560px, calc(100vw - 16px));
+    max-height: calc(100vh - 16px);
+    overflow: hidden;
+    padding: 6px 8px;
+    border: 1px solid rgb(255 255 255 / 16%);
+    border-radius: 4px;
+    background: rgb(32 33 36 / 98%);
+    box-shadow: 0 2px 8px rgb(0 0 0 / 24%);
+    color: #f1f3f4;
+    font-family: Arial, sans-serif;
+    font-size: 13px;
+    font-weight: 400;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+    pointer-events: none;
+    white-space: pre-wrap;
+}
+
 .photon-shell[data-dim-overlays="true"] .photon-overlay-scrim {
     background: var(--photon-color-scrim);
 }

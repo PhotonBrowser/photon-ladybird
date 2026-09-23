@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { Toolbar } from "./browser/Toolbar";
 import { TabStrip } from "./features/tabs/TabStrip";
@@ -7,6 +7,39 @@ import { NewTabPage } from "./pages/NewTabPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { useBrowserSnapshot } from "./features/browser/useBrowserSnapshot";
 import type { BrowserOverlay, PhotonApi } from "./types";
+
+type PageTooltip = { text: string; x: number; y: number };
+
+function isPageTooltip(value: unknown): value is PageTooltip {
+    if (typeof value !== "object" || value === null) return false;
+    const tooltip = value as Partial<PageTooltip>;
+    return typeof tooltip.text === "string" && typeof tooltip.x === "number" && typeof tooltip.y === "number";
+}
+
+function BrowserTooltip({ tooltip }: { tooltip: PageTooltip }): React.JSX.Element {
+    const tooltipRef = useRef<HTMLDivElement>(null);
+    const [position, setPosition] = useState({ left: tooltip.x + 8, top: tooltip.y + 18 });
+
+    useLayoutEffect(() => {
+        const bounds = tooltipRef.current?.getBoundingClientRect();
+        if (!bounds) return;
+        const left = Math.max(8, Math.min(tooltip.x + 8, window.innerWidth - bounds.width - 8));
+        const below = tooltip.y + 18 + bounds.height <= window.innerHeight - 8;
+        const top = below ? tooltip.y + 18 : Math.max(8, tooltip.y - bounds.height - 8);
+        setPosition({ left, top });
+    }, [tooltip]);
+
+    return (
+        <div
+            aria-hidden="true"
+            className="photon-page-tooltip"
+            ref={tooltipRef}
+            style={{ left: position.left, top: position.top }}
+        >
+            {tooltip.text}
+        </div>
+    );
+}
 
 interface AppProps {
     api: PhotonApi;
@@ -16,6 +49,7 @@ export default function App({ api }: AppProps): React.JSX.Element {
     const snapshot = useBrowserSnapshot(api);
     const addressInput = useRef<HTMLInputElement>(null);
     const [activeOverlay, setActiveOverlay] = useState<BrowserOverlay | null>(null);
+    const [pageTooltip, setPageTooltip] = useState<PageTooltip | null>(null);
     const activeTab = snapshot.tabs.find((tab) => tab.id === snapshot.activeTabId);
     const activeTabKey = `${activeTab?.id ?? ""}:${activeTab?.url ?? ""}`;
     const previousActiveTabKey = useRef(activeTabKey);
@@ -31,9 +65,36 @@ export default function App({ api }: AppProps): React.JSX.Element {
     useEffect(() => {
         if (previousActiveTabKey.current === activeTabKey) return;
         previousActiveTabKey.current = activeTabKey;
+        setPageTooltip(null);
         if (activeOverlay && activeOverlay !== "settings-theme") api.ui.setCaptureRegion(activeOverlay, false);
         setActiveOverlay(null);
     }, [activeOverlay, activeTabKey, api]);
+
+    useEffect(() => {
+        let showTimer = 0;
+        const clearTooltip = (): void => {
+            window.clearTimeout(showTimer);
+            setPageTooltip(null);
+        };
+        const showTooltip = (event: Event): void => {
+            const detail = (event as CustomEvent<unknown>).detail;
+            if (!isPageTooltip(detail)) return;
+            window.clearTimeout(showTimer);
+            setPageTooltip(null);
+            showTimer = window.setTimeout(() => setPageTooltip(detail), 600);
+        };
+        window.addEventListener("photon-page-tooltip", showTooltip);
+        window.addEventListener("photon-page-tooltip-clear", clearTooltip);
+        return () => {
+            window.clearTimeout(showTimer);
+            window.removeEventListener("photon-page-tooltip", showTooltip);
+            window.removeEventListener("photon-page-tooltip-clear", clearTooltip);
+        };
+    }, []);
+
+    useEffect(() => {
+        if (activeOverlay) setPageTooltip(null);
+    }, [activeOverlay]);
 
     useEffect(() => {
         const focusAddressBar = (): void => {
@@ -80,6 +141,7 @@ export default function App({ api }: AppProps): React.JSX.Element {
                     type="button"
                 />
             )}
+            {pageTooltip && !activeOverlay ? <BrowserTooltip tooltip={pageTooltip} /> : null}
             {activeTab?.internalPage === "new-tab" ? <NewTabPage /> : null}
             {activeTab?.internalPage === "settings" ? (
                 <SettingsPage

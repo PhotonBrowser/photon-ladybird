@@ -15,6 +15,7 @@
 #include <UI/Qt/StringUtils.h>
 #include <UI/Qt/WebContentView.h>
 
+#include <QCursor>
 #include <QStandardPaths>
 #include <QWidget>
 
@@ -181,6 +182,18 @@ Ladybird::WebContentView& BrowserView::create_view(uint64_t tab_id)
     };
     view->on_loading_state_change = [this, tab_id](bool loading) {
         update_loading(tab_id, loading);
+    };
+    view->on_enter_tooltip_area = [this, tab_id](ByteString const& tooltip) {
+        if (tab_id != active_tab_id())
+            return;
+        auto text = qstring_from_ak_string(tooltip)
+                        .replace(QStringLiteral("\r\n"), QStringLiteral("\n"))
+                        .replace(QLatin1Char('\r'), QLatin1Char('\n'));
+        emit page_tooltip_changed(move(text), m_host.mapFromGlobal(QCursor::pos()));
+    };
+    view->on_leave_tooltip_area = [this, tab_id] {
+        if (tab_id == active_tab_id())
+            emit page_tooltip_cleared();
     };
     view->on_close = [this, tab_id] {
         apply_app_effects(dispatch_app_command(m_state, PhotonAppCommandKind_CloseTab, tab_id));
@@ -402,8 +415,11 @@ void BrowserView::update_loading(uint64_t tab_id, bool loading)
     if (photon_browser_set_loading(m_state, tab_id, loading) == 0)
         return;
     emit browser_state_changed();
-    if (tab_id == active_tab_id())
+    if (tab_id == active_tab_id()) {
+        if (loading)
+            emit page_tooltip_cleared();
         emit loading_changed();
+    }
 }
 
 void BrowserView::update_navigation_capabilities(uint64_t tab_id)

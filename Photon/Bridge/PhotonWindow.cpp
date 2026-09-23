@@ -78,12 +78,14 @@ void Window::install_web_shortcuts()
         auto* shortcut = new QShortcut(QKeySequence(QKeyCombination(modifiers, key)), this);
         shortcut->setContext(Qt::WindowShortcut);
         connect(shortcut, &QShortcut::activated, this, action);
+        return shortcut;
     };
 
     for (auto modifier : { Qt::ControlModifier, Qt::MetaModifier }) {
         add(modifier, Qt::Key_L, [this] { m_scene->focus_address_bar(); });
         add(modifier, Qt::Key_T, [this] { m_browser->create_tab(); });
-        add(modifier, Qt::Key_W, [this] { m_browser->close_tab(m_browser->active_tab_id()); });
+        auto* close_tab_shortcut = add(modifier, Qt::Key_W, [this] { m_browser->close_tab(m_browser->active_tab_id()); });
+        close_tab_shortcut->setAutoRepeat(false);
         add(modifier, Qt::Key_R, [this] { m_browser->reload(); });
     }
     add(Qt::NoModifier, Qt::Key_F5, [this] { m_browser->reload(); });

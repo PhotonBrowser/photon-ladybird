@@ -14,6 +14,7 @@
 #include <Photon/Bridge/PhotonCommandTransport.h>
 
 #include <QObject>
+#include <QPoint>
 #include <QUrl>
 
 class QWidget;
@@ -37,6 +38,8 @@ public:
     Ladybird::WebContentView& view() { return *m_view; }
     void load(BrowserView const& browser);
     void update_state(BrowserView const& browser);
+    void update_page_tooltip(QString const& text, QPoint position);
+    void clear_page_tooltip();
     void focus_address_bar();
 
     Function<void(PhotonCommand const&)> on_command;

@@ -100,6 +100,21 @@ void ChromeSurface::update_state(BrowserView const& browser)
     m_view->run_javascript(ak_string_from_qstring(script));
 }
 
+void ChromeSurface::update_page_tooltip(QString const& text, QPoint position)
+{
+    auto encoded_text = text.toUtf8().toBase64();
+    auto script = QStringLiteral("window.dispatchEvent(new CustomEvent('photon-page-tooltip', { detail: { text: new TextDecoder().decode(Uint8Array.from(atob('%1'), c => c.charCodeAt(0))), x: %2, y: %3 } }));")
+                      .arg(QString::fromLatin1(encoded_text))
+                      .arg(position.x())
+                      .arg(position.y());
+    m_view->run_javascript(ak_string_from_qstring(script));
+}
+
+void ChromeSurface::clear_page_tooltip()
+{
+    m_view->run_javascript(ak_string_from_qstring(QStringLiteral("window.dispatchEvent(new Event('photon-page-tooltip-clear'));")));
+}
+
 void ChromeSurface::focus_address_bar()
 {
     m_view->run_javascript(ak_string_from_qstring(QStringLiteral("window.dispatchEvent(new Event('photon-focus-address'));")));

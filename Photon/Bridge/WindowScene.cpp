@@ -49,6 +49,7 @@ WindowScene::WindowScene(BrowserView& browser, QWidget& parent)
         update_page_cursor();
     });
     QObject::connect(&m_browser, &BrowserView::active_tab_changed, this, [this] {
+        m_chrome->clear_page_tooltip();
         m_active_page_view->hide();
         m_active_page_view->removeEventFilter(this);
         m_active_page_view->setParent(parentWidget());
@@ -75,6 +76,12 @@ WindowScene::WindowScene(BrowserView& browser, QWidget& parent)
         m_active_page_view->setVisible(!m_browser.is_internal_page());
         m_chrome->view().set_preferred_color_scheme(m_browser.preferred_color_scheme());
         m_chrome->update_state(m_browser);
+    });
+    QObject::connect(&m_browser, &BrowserView::page_tooltip_changed, this, [this](QString text, QPoint position) {
+        m_chrome->update_page_tooltip(text, position);
+    });
+    QObject::connect(&m_browser, &BrowserView::page_tooltip_cleared, this, [this] {
+        m_chrome->clear_page_tooltip();
     });
     QObject::connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, [this](Qt::ColorScheme) {
         m_browser.refresh_preferred_color_scheme();
@@ -118,6 +125,8 @@ void WindowScene::focus_address_bar()
 void WindowScene::set_overlay_open(bool open)
 {
     m_overlay_open = open;
+    if (open)
+        m_chrome->clear_page_tooltip();
     if (!open)
         return;
     m_chrome->view().setFocus(Qt::OtherFocusReason);
