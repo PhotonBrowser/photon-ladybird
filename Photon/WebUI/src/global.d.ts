@@ -1,8 +1,8 @@
-import type { BrowserState, PhotonApi } from "./types";
+import type { BrowserSnapshot, PhotonApi } from "./types";
 
 declare global {
     interface Window {
         photon: PhotonApi;
-        __photonInitialState?: BrowserState;
+        __photonInitialState?: BrowserSnapshot;
     }
 }

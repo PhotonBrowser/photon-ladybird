@@ -1,93 +1,79 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import type { BrowserState, PhotonApi, PhotonNavigation } from "./types";
+import { Toolbar } from "./browser/Toolbar";
+import { TabStrip } from "./features/tabs/TabStrip";
+import { NewTabPage } from "./pages/NewTabPage";
+import { SettingsPage } from "./pages/SettingsPage";
+import { useBrowserSnapshot } from "./features/browser/useBrowserSnapshot";
+import type { BrowserOverlay, PhotonApi } from "./types";
 
 interface AppProps {
     api: PhotonApi;
 }
 
-interface ToolbarProps {
-    navigation: PhotonNavigation;
-    state: BrowserState;
-    onOpenPopover(): void;
-}
+export default function App({ api }: AppProps): React.JSX.Element {
+    const snapshot = useBrowserSnapshot(api);
+    const addressInput = useRef<HTMLInputElement>(null);
+    const [activeOverlay, setActiveOverlay] = useState<BrowserOverlay | null>(null);
+    const activeTab = snapshot.tabs.find((tab) => tab.id === snapshot.activeTabId);
+    const activeTabKey = `${activeTab?.id ?? ""}:${activeTab?.url ?? ""}`;
+    const previousActiveTabKey = useRef(activeTabKey);
 
-function Toolbar({ navigation, state, onOpenPopover }: ToolbarProps) {
-    const [address, setAddress] = useState(state.url);
-
-    useEffect(() => {
-        setAddress(state.url);
-    }, [state.url]);
-
-    const submitAddress = (event: FormEvent<HTMLFormElement>) => {
-        event.preventDefault();
-        const value = address.trim();
-        if (value) navigation.navigate(value);
+    const setOverlayOpen = (name: BrowserOverlay, open: boolean, notifyNative = true): void => {
+        if (notifyNative) api.ui.setCaptureRegion(name, open);
+        setActiveOverlay((current) => {
+            if (open) return name;
+            return current === name ? null : current;
+        });
     };
 
-    return (
-        <header className="toolbar" data-photon-input="capture">
-            <button type="button" aria-label="Back" disabled={!state.canGoBack} onClick={navigation.back}>
-                ←
-            </button>
-            <button type="button" aria-label="Forward" disabled={!state.canGoForward} onClick={navigation.forward}>
-                →
-            </button>
-            <button type="button" aria-label="Reload" onClick={navigation.reload}>
-                ↻
-            </button>
-            <form onSubmit={submitAddress}>
-                <input
-                    id="address"
-                    aria-label="Address"
-                    autoComplete="off"
-                    value={address}
-                    onChange={(event) => setAddress(event.target.value)}
-                />
-            </form>
-            <button type="button" aria-label="Open overlay" onClick={onOpenPopover}>
-                Overlay test
-            </button>
-            <span id="status" aria-live="polite">
-                {state.loading ? "Loading…" : state.title || "Photon"}
-            </span>
-        </header>
-    );
-}
-
-interface PopoverProps {
-    open: boolean;
-    onClose(): void;
-}
-
-function Popover({ open, onClose }: PopoverProps) {
-    return (
-        <section className={open ? "popover open" : "popover"} aria-hidden={!open} data-photon-input="capture">
-            <strong>Photon popover</strong>
-            <p>This is a separate privileged document above the webpage.</p>
-            <button type="button" onClick={onClose}>
-                Close
-            </button>
-        </section>
-    );
-}
-
-export default function App({ api }: AppProps) {
-    const [popoverOpen, setPopoverOpen] = useState(false);
+    useEffect(() => {
+        if (previousActiveTabKey.current === activeTabKey) return;
+        previousActiveTabKey.current = activeTabKey;
+        if (activeOverlay) api.ui.setCaptureRegion(activeOverlay, false);
+        setActiveOverlay(null);
+    }, [activeOverlay, activeTabKey, api]);
 
     useEffect(() => {
-        const closeOnEscape = (event: KeyboardEvent) => {
-            if (event.key === "Escape") setPopoverOpen(false);
+        const focusAddressBar = (): void => {
+            if (activeOverlay) {
+                api.ui.setCaptureRegion(activeOverlay, false);
+                setActiveOverlay(null);
+            }
+            addressInput.current?.focus();
+            addressInput.current?.select();
         };
-
-        window.addEventListener("keydown", closeOnEscape);
-        return () => window.removeEventListener("keydown", closeOnEscape);
-    }, []);
+        window.addEventListener("photon-focus-address", focusAddressBar);
+        return () => window.removeEventListener("photon-focus-address", focusAddressBar);
+    }, [activeOverlay, api]);
 
     return (
-        <>
-            <Toolbar navigation={api.navigation} state={api.browser.state} onOpenPopover={() => setPopoverOpen(true)} />
-            <Popover open={popoverOpen} onClose={() => setPopoverOpen(false)} />
-        </>
+        <div className="photon-shell">
+            <div className="photon-chrome">
+                <div className="photon-titlebar">
+                    <TabStrip activeTabId={snapshot.activeTabId} api={api} tabs={snapshot.tabs} />
+                </div>
+                <Toolbar
+                    addressInput={addressInput}
+                    api={api}
+                    menuOpen={activeOverlay === "browser-menu"}
+                    onMenuOpenChange={(open, notifyNative) => setOverlayOpen("browser-menu", open, notifyNative)}
+                    onSiteInfoOpenChange={(open, notifyNative) => setOverlayOpen("site-info", open, notifyNative)}
+                    siteInfoOpen={activeOverlay === "site-info"}
+                    snapshot={snapshot}
+                />
+            </div>
+            {activeOverlay && (
+                <button
+                    aria-label="Close overlay"
+                    className="photon-overlay-scrim"
+                    onClick={() => setOverlayOpen(activeOverlay, false)}
+                    tabIndex={-1}
+                    type="button"
+                />
+            )}
+            {activeTab?.internalPage === "new-tab" ? <NewTabPage /> : null}
+            {activeTab?.internalPage === "settings" ? <SettingsPage api={api} snapshot={snapshot} /> : null}
+        </div>
     );
 }
