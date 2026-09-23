@@ -479,6 +479,10 @@ void StyleComputer::visit_edges(Visitor& visitor)
         visitor.visit(entry.sheet);
     for (auto const& entry : m_constructed_sheet_ids)
         visitor.visit(entry.key);
+    for (auto const& entry : m_shared_compiled_style_sheets) {
+        if (entry.value)
+            entry.value->contents().visit_edges(visitor);
+    }
 
     if (m_cached_font_computation_context.has_value())
         m_cached_font_computation_context->visit_edges(visitor);
@@ -712,7 +716,7 @@ void StyleComputer::collect_animation_effects_into(DOM::AbstractElement abstract
     Vector<KeyframeDeclaration> keyframe_declarations;
     Vector<StyleValueFFI::FfiAnimationEffect> ffi_effects;
     Vector<StyleValueFFI::FfiAnimationKeyframe> ffi_keyframes;
-    Vector<Vector<StyleValueFFI::FfiLinearEasingPoint>> linear_easing_points;
+    Vector<Vector<Compositing::RustFFI::FfiLinearEasingPoint>> linear_easing_points;
 
     auto to_ffi_composite_operation = [](Bindings::CompositeOperation operation) {
         switch (operation) {
@@ -854,7 +858,7 @@ void StyleComputer::collect_animation_effects_into(DOM::AbstractElement abstract
             auto& points = linear_easing_points.last();
             ffi_keyframes.append({
                 .key = static_cast<i64>(it.key()),
-                .easing = to_ffi_easing_descriptor<StyleValueFFI::FfiEasingDescriptor>(*easing, points),
+                .easing = to_ffi_easing_descriptor<Compositing::RustFFI::FfiEasingDescriptor>(*easing, points),
                 .composite = to_ffi_composite_operation(composite_operation),
             });
             for (auto const& [property, value] : it->properties) {
