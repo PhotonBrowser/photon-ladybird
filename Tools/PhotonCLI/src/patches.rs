@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 use console::style;
@@ -116,6 +116,93 @@ pub fn check(repository: &Path) -> Result<i32> {
     Ok(0)
 }
 
+/// Return the Ladybird checkout to its recorded upstream state after validating
+/// that every changed patch-owned file exactly matches the registered series.
+pub fn unapply(repository: &Path) -> Result<i32> {
+    let patches = series(repository)?;
+    match checkout_state(repository, &patches)
+        .context("Ladybird checkout is neither pristine nor the exact registered patch series")?
+    {
+        CheckoutState::Pristine => {
+            ui::header("Photon", Some("Patches unapply"));
+            ui::note("Ladybird", "already pristine at the recorded upstream base");
+            return Ok(0);
+        }
+        CheckoutState::Materialized => {}
+    }
+
+    let owned_paths = patch_paths(repository, &patches)?;
+    let staged = staged_paths(repository)?;
+    let unexpected = staged
+        .iter()
+        .filter(|path| !owned_paths.contains(*path))
+        .collect::<Vec<_>>();
+    if !unexpected.is_empty() {
+        bail!(
+            "staged changes outside the registered patch materialization prevent unapplying patches:\n{}",
+            unexpected
+                .iter()
+                .map(|path| format!("  {}", path.display()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+
+    for path in &staged {
+        let status = Command::new("git")
+            .args(["diff", "--quiet", "--"])
+            .arg(path)
+            .current_dir(repository)
+            .status()?;
+        match status.code() {
+            Some(0) => {}
+            Some(1) => bail!(
+                "{} has staged content beyond the current patch materialization; unstage or commit it separately",
+                path.display()
+            ),
+            _ => bail!("failed to compare staged and working-tree content for {}", path.display()),
+        }
+    }
+
+    if !staged.is_empty() {
+        for path in &staged {
+            let object = format!("HEAD:{}", path.display());
+            let tracked = Command::new("git")
+                .args(["cat-file", "-e", &object])
+                .current_dir(repository)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()?
+                .success();
+            let mut unstage = Command::new("git");
+            if tracked {
+                unstage.args(["restore", "--staged", "--"]);
+            } else {
+                unstage.args(["rm", "--cached", "--force", "--"]);
+            }
+            unstage.arg(path).current_dir(repository);
+            successful(&mut unstage, &format!("unstage materialized file {}", path.display()))?;
+        }
+    }
+
+    ui::header("Photon", Some("Patches unapply"));
+    for patch in patches.iter().rev() {
+        successful(
+            Command::new("git")
+                .args(["apply", "--reverse"])
+                .arg(patch_path(repository, patch)?)
+                .current_dir(repository),
+            &format!("unapply patch {}", patch.id),
+        )?;
+    }
+
+    let upstream = metadata::read_upstream(&repository.join("Meta/Photon/upstream.toml"))?;
+    verify_pristine_files(repository, &patches, &upstream.revision)?;
+    ui::ok("Ladybird", "patches unapplied; checkout is pristine at the recorded base");
+    ui::hint("The next `./photon build` or `./photon run` will materialize the registered series again.");
+    Ok(0)
+}
+
 fn verify_materialized_files(repository: &Path, patches: &[Patch]) -> Result<()> {
     let upstream = metadata::read_upstream(&repository.join("Meta/Photon/upstream.toml"))?;
     let temporary = std::env::temp_dir().join(format!("photon-materialized-{}", std::process::id()));
@@ -146,6 +233,8 @@ fn verify_pristine_files(repository: &Path, patches: &[Patch], revision: &str) -
         let exists = Command::new("git")
             .args(["cat-file", "-e", &object])
             .current_dir(repository)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()?
             .success();
         let expected = if exists {
@@ -423,6 +512,20 @@ fn changed_paths(repository: &Path) -> Result<Vec<PathBuf>> {
     Ok(String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter_map(|line| line.get(3..).map(str::trim).map(PathBuf::from))
+        .collect())
+}
+
+fn staged_paths(repository: &Path) -> Result<Vec<PathBuf>> {
+    let output = Command::new("git")
+        .args(["diff", "--cached", "--name-only", "--no-renames"])
+        .current_dir(repository)
+        .output()?;
+    if !output.status.success() {
+        bail!("failed to inspect staged changes");
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(PathBuf::from)
         .collect())
 }
 

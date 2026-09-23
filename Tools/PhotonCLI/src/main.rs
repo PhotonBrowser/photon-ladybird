@@ -102,6 +102,8 @@ enum PatchCommand {
     Status,
     /// Check that the complete series applies to the recorded base
     Check,
+    /// Reverse the exact registered patch materialization from the Ladybird checkout
+    Unapply,
 }
 
 #[derive(Debug, Args)]
@@ -199,6 +201,9 @@ fn run() -> Result<i32> {
         Command::Patches {
             command: PatchCommand::Check,
         } => patches::check(&repository),
+        Command::Patches {
+            command: PatchCommand::Unapply,
+        } => patches::unapply(&repository),
     }
 }
 
