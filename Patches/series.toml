@@ -17,3 +17,15 @@ id = "0003"
 file = "ladybird/0003-webcontent-transparent-view.patch"
 description = "Carry transparent view composition through WebContent IPC and Qt"
 area = "Rendering integration"
+
+[[patches]]
+id = "0004"
+file = "ladybird/0004-intercept-embedded-navigation-commands.patch"
+description = "Let embedders consume navigation requests before document navigation"
+area = "Navigation integration"
+
+[[patches]]
+id = "0005"
+file = "ladybird/0005-support-css-corner-shapes.patch"
+description = "Carry CSS corner shapes through Ladybird painting and serialization"
+area = "Rendering"

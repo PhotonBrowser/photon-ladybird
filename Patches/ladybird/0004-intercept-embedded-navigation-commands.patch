@@ -1,0 +1,29 @@
+diff --git a/Libraries/LibWebView/ViewImplementation.h b/Libraries/LibWebView/ViewImplementation.h
+index 49f5e57777..9bbdebef03 100644
+--- a/Libraries/LibWebView/ViewImplementation.h
++++ b/Libraries/LibWebView/ViewImplementation.h
+@@ -408,6 +408,8 @@ public:
+     Function<void()> on_link_unhover;
+     Function<void(Utf16String const&)> on_title_change;
+     Function<void(URL::URL const&)> on_url_change;
++    // Return true when the embedder handled and canceled a top-level navigation request.
++    Function<bool(URL::URL const&)> on_navigation_request;
+     Function<void()> on_load_start;
+     Function<void(URL::URL const&)> on_load_finish;
+     Function<void(bool)> on_loading_state_change;
+diff --git a/Libraries/LibWebView/WebContentPage.cpp b/Libraries/LibWebView/WebContentPage.cpp
+index d872dfed49..37d6887fbd 100644
+--- a/Libraries/LibWebView/WebContentPage.cpp
++++ b/Libraries/LibWebView/WebContentPage.cpp
+@@ -1424,6 +1424,11 @@ void WebContentPage::did_request_navigation_start(Web::HTML::CrossProcessId navi
+         return;
+     }
+ 
++    if (target == Web::NavigationTarget::TopLevel && view().on_navigation_request && view().on_navigation_request(url)) {
++        async_cancel_navigation_params_creation(navigable_id, navigation_id);
++        return;
++    }
++
+     auto sequence_number = target_navigable->top_level_traversable().next_sequence_number();
+     if (auto const& ongoing_navigation = target_navigable->ongoing_navigation(); ongoing_navigation.has_value()
+         && ongoing_navigation->sequence_number != 0

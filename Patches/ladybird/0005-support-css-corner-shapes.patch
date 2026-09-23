@@ -1,0 +1,460 @@
+diff --git a/Libraries/LibGfx/CornerRadii.cpp b/Libraries/LibGfx/CornerRadii.cpp
+--- a/Libraries/LibGfx/CornerRadii.cpp
++++ b/Libraries/LibGfx/CornerRadii.cpp
+@@ -54,6 +54,7 @@
+ {
+     TRY(encoder.encode(radius.horizontal_radius));
+     TRY(encoder.encode(radius.vertical_radius));
++    TRY(encoder.encode(radius.shape_milli));
+     return {};
+ }
+ 
+@@ -63,6 +64,7 @@
+     return Gfx::CornerRadius {
+         .horizontal_radius = TRY(decoder.decode<int>()),
+         .vertical_radius = TRY(decoder.decode<int>()),
++        .shape_milli = TRY(decoder.decode<int>()),
+     };
+ }
+ 
+diff --git a/Libraries/LibGfx/CornerRadii.h b/Libraries/LibGfx/CornerRadii.h
+--- a/Libraries/LibGfx/CornerRadii.h
++++ b/Libraries/LibGfx/CornerRadii.h
+@@ -21,6 +21,7 @@
+ struct CornerRadius {
+     int horizontal_radius { 0 };
+     int vertical_radius { 0 };
++    int shape_milli { 1000 };
+ 
+     inline operator bool() const
+     {
+diff --git a/Libraries/LibGfx/Rust/src/corner_radii.rs b/Libraries/LibGfx/Rust/src/corner_radii.rs
+--- a/Libraries/LibGfx/Rust/src/corner_radii.rs
++++ b/Libraries/LibGfx/Rust/src/corner_radii.rs
+@@ -11,6 +11,8 @@
+ pub struct CornerRadius {
+     pub horizontal_radius: i32,
+     pub vertical_radius: i32,
++    /// CSS `corner-*-shape` superellipse parameter; 1 is the usual ellipse and 2 is a squircle.
++    pub shape_milli: i32,
+ }
+ 
+ impl CornerRadius {
+@@ -39,6 +41,7 @@
+         let corner = CornerRadius {
+             horizontal_radius: radius,
+             vertical_radius: radius,
++            shape_milli: 1000,
+         };
+         Self {
+             top_left: corner,
+@@ -60,7 +63,8 @@
+         let outside_ellipse = |r: CornerRadius, cx: i32, cy: i32| {
+             let dx = (px - cx) as f32 / r.horizontal_radius as f32;
+             let dy = (py - cy) as f32 / r.vertical_radius as f32;
+-            dx * dx + dy * dy > 1.0
++            let exponent = 2.0f32.powf(r.shape_milli as f32 / 1000.0);
++            dx.abs().powf(exponent) + dy.abs().powf(exponent) > 1.0
+         };
+         if self.top_left.is_present() {
+             let cx = rect.x + self.top_left.horizontal_radius;
+@@ -105,7 +109,8 @@
+         let outside_ellipse = |r: CornerRadius, cx: f32, cy: f32| {
+             let dx = (px - cx) / r.horizontal_radius as f32;
+             let dy = (py - cy) / r.vertical_radius as f32;
+-            dx * dx + dy * dy > 1.0
++            let exponent = 2.0f32.powf(r.shape_milli as f32 / 1000.0);
++            dx.abs().powf(exponent) + dy.abs().powf(exponent) > 1.0
+         };
+         if self.top_left.is_present() {
+             let cx = rect.x + self.top_left.horizontal_radius as f32;
+diff --git a/Libraries/LibWeb/Painting/DisplayListCommand.h b/Libraries/LibWeb/Painting/DisplayListCommand.h
+--- a/Libraries/LibWeb/Painting/DisplayListCommand.h
++++ b/Libraries/LibWeb/Painting/DisplayListCommand.h
+@@ -142,7 +142,7 @@
+ static_assert(sizeof(DisplayListCommandRun) == 40);
+ static_assert(IsTriviallyCopyable<DisplayListGlyph>);
+ static_assert(IsTriviallyCopyable<DisplayListInlineClip>);
+-static_assert(sizeof(DisplayListInlineClip) == 64);
++static_assert(sizeof(DisplayListInlineClip) == 80);
+ static_assert(IsTriviallyCopyable<DisplayListInlineTransform>);
+ static_assert(sizeof(DisplayListInlineTransform) == 32);
+ 
+diff --git a/Libraries/LibWeb/Painting/DisplayListPlayerSkia.cpp b/Libraries/LibWeb/Painting/DisplayListPlayerSkia.cpp
+--- a/Libraries/LibWeb/Painting/DisplayListPlayerSkia.cpp
++++ b/Libraries/LibWeb/Painting/DisplayListPlayerSkia.cpp
+@@ -16,6 +16,7 @@
+ #include <core/SkColorSpace.h>
+ #include <core/SkMaskFilter.h>
+ #include <core/SkPath.h>
++#include <core/SkPathBuilder.h>
+ #include <core/SkPathEffect.h>
+ #include <core/SkPicture.h>
+ #include <core/SkPictureRecorder.h>
+@@ -112,9 +113,51 @@
+     return rrect;
+ }
+ 
++static SkPath to_skia_corner_path(auto const& rect, Gfx::CornerRadii const& radii)
++{
++    auto const left = static_cast<float>(rect.x());
++    auto const top = static_cast<float>(rect.y());
++    auto const right = static_cast<float>(rect.right());
++    auto const bottom = static_cast<float>(rect.bottom());
++    SkPathBuilder path;
++    path.moveTo(left + radii.top_left.horizontal_radius, top);
++    path.lineTo(right - radii.top_right.horizontal_radius, top);
++
++    auto append_corner = [&](Gfx::CornerRadius const& radius, float cx, float cy, float start, float end) {
++        if (!radius)
++            return;
++        auto exponent = exp2f(static_cast<float>(radius.shape_milli) / 1000.0f);
++        for (int step = 1; step <= 64; ++step) {
++            auto angle = start + (end - start) * step / 64.0f;
++            auto cosine = cosf(angle);
++            auto sine = sinf(angle);
++            auto x = copysignf(powf(abs(cosine), 2.0f / exponent), cosine);
++            auto y = copysignf(powf(abs(sine), 2.0f / exponent), sine);
++            path.lineTo(cx + x * radius.horizontal_radius, cy + y * radius.vertical_radius);
++        }
++    };
++
++    append_corner(radii.top_right, right - radii.top_right.horizontal_radius, top + radii.top_right.vertical_radius, -AK::Pi<float> / 2, 0);
++    path.lineTo(right, bottom - radii.bottom_right.vertical_radius);
++    append_corner(radii.bottom_right, right - radii.bottom_right.horizontal_radius, bottom - radii.bottom_right.vertical_radius, 0, AK::Pi<float> / 2);
++    path.lineTo(left + radii.bottom_left.horizontal_radius, bottom);
++    append_corner(radii.bottom_left, left + radii.bottom_left.horizontal_radius, bottom - radii.bottom_left.vertical_radius, AK::Pi<float> / 2, AK::Pi<float>);
++    path.lineTo(left, top + radii.top_left.vertical_radius);
++    append_corner(radii.top_left, left + radii.top_left.horizontal_radius, top + radii.top_left.vertical_radius, AK::Pi<float>, AK::Pi<float> * 1.5f);
++    path.close();
++    return path.detach();
++}
++
++static bool has_superellipse_corner(Gfx::CornerRadii const& radii)
++{
++    return radii.top_left.shape_milli != 1000 || radii.top_right.shape_milli != 1000 || radii.bottom_right.shape_milli != 1000 || radii.bottom_left.shape_milli != 1000;
++}
++
+ static void clip_to_rounded_rect(SkCanvas& canvas, auto const& rect, Gfx::CornerRadii const& corner_radii, SkClipOp clip_op)
+ {
+-    if (corner_radii.has_any_radius())
++    if (has_superellipse_corner(corner_radii))
++        canvas.clipPath(to_skia_corner_path(rect, corner_radii), clip_op, true);
++    else if (corner_radii.has_any_radius())
+         canvas.clipRRect(to_skia_rrect(rect, corner_radii), clip_op, true);
+     else
+         canvas.clipRect(to_skia_rect(rect), clip_op, true);
+@@ -753,17 +796,20 @@
+ 
+ void DisplayListPlayerSkia::play_command(PaintOuterBoxShadow const& command)
+ {
+-    auto content_rrect = to_skia_rrect(command.device_content_rect, command.content_corner_radii);
+-
+     auto& canvas = surface().canvas();
+     canvas.save();
+-    canvas.clipRRect(content_rrect, SkClipOp::kDifference, true);
++    if (has_superellipse_corner(command.content_corner_radii))
++        canvas.clipPath(to_skia_corner_path(command.device_content_rect, command.content_corner_radii), SkClipOp::kDifference, true);
++    else
++        canvas.clipRRect(to_skia_rrect(command.device_content_rect, command.content_corner_radii), SkClipOp::kDifference, true);
+     SkPaint paint;
+     paint.setAntiAlias(true);
+     paint.setColor(to_skia_color(command.color));
+     paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, command.blur_radius / 2));
+-    auto shadow_rounded_rect = to_skia_rrect(command.shadow_rect, command.shadow_corner_radii);
+-    canvas.drawRRect(shadow_rounded_rect, paint);
++    if (has_superellipse_corner(command.shadow_corner_radii))
++        canvas.drawPath(to_skia_corner_path(command.shadow_rect, command.shadow_corner_radii), paint);
++    else
++        canvas.drawRRect(to_skia_rrect(command.shadow_rect, command.shadow_corner_radii), paint);
+     canvas.restore();
+ }
+ 
+@@ -772,8 +818,12 @@
+     auto outer_rect = to_skia_rrect(command.outer_shadow_rect, command.content_corner_radii);
+     auto inner_rect = to_skia_rrect(command.inner_shadow_rect, command.inner_shadow_corner_radii);
+ 
+-    auto outer_path = SkPath::RRect(outer_rect);
+-    auto inner_path = SkPath::RRect(inner_rect);
++    auto outer_path = has_superellipse_corner(command.content_corner_radii)
++        ? to_skia_corner_path(command.outer_shadow_rect, command.content_corner_radii)
++        : SkPath::RRect(outer_rect);
++    auto inner_path = has_superellipse_corner(command.inner_shadow_corner_radii)
++        ? to_skia_corner_path(command.inner_shadow_rect, command.inner_shadow_corner_radii)
++        : SkPath::RRect(inner_rect);
+ 
+     auto result = Op(outer_path, inner_path, SkPathOp::kDifference_SkPathOp);
+     if (!result.has_value()) {
+@@ -787,7 +837,10 @@
+     path_paint.setColor(to_skia_color(command.color));
+     path_paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, command.blur_radius / 2));
+     canvas.save();
+-    canvas.clipRRect(to_skia_rrect(command.device_content_rect, command.content_corner_radii), true);
++    if (has_superellipse_corner(command.content_corner_radii))
++        canvas.clipPath(to_skia_corner_path(command.device_content_rect, command.content_corner_radii), true);
++    else
++        canvas.clipRRect(to_skia_rrect(command.device_content_rect, command.content_corner_radii), true);
+     canvas.drawPath(result_path, path_paint);
+     canvas.restore();
+ }
+@@ -827,8 +880,10 @@
+     paint.setColor(to_skia_color(color));
+     paint.setAntiAlias(true);
+ 
+-    auto rounded_rect = to_skia_rrect(rect, command.corner_radii);
+-    canvas.drawRRect(rounded_rect, paint);
++    if (has_superellipse_corner(command.corner_radii))
++        canvas.drawPath(to_skia_corner_path(rect, command.corner_radii), paint);
++    else
++        canvas.drawRRect(to_skia_rrect(rect, command.corner_radii), paint);
+ }
+ 
+ void DisplayListPlayerSkia::play_command(FillRoundedRectRing const& command)
+@@ -851,6 +906,7 @@
+     };
+ 
+     auto outer_rounded_rect = to_skia_rrect(rect, command.corner_radii);
++    auto has_superellipse = has_superellipse_corner(command.corner_radii);
+     // Without curved corners the ring is four bands, which Skia batches as plain rects. Their shared
+     // edges only stay invisible while they land on whole device pixels, so any other canvas transform
+     // takes the single-draw route below, which resolves coverage once for the whole ring.
+@@ -871,15 +927,19 @@
+     }
+ 
+     if (inner_rect.is_empty()) {
+-        canvas.drawRRect(outer_rounded_rect, paint);
++        if (has_superellipse)
++            canvas.drawPath(to_skia_corner_path(rect, command.corner_radii), paint);
++        else
++            canvas.drawRRect(outer_rounded_rect, paint);
+         return;
+     }
+ 
+     // An inner corner keeps its curve only while both radii stay positive after the adjacent edges
+     // are taken off, which is how SkRRect treats a corner with one zero radius as well.
+     auto inner_corner = [](Gfx::CornerRadius const& outer_corner, int horizontal_edge_width, int vertical_edge_width) {
+         return Gfx::CornerRadius {
+             max(outer_corner.horizontal_radius - horizontal_edge_width, 0),
+             max(outer_corner.vertical_radius - vertical_edge_width, 0),
++            outer_corner.shape_milli,
+         };
+     };
+@@ -889,6 +948,13 @@
+         inner_corner(command.corner_radii.bottom_right, right_width, bottom_width),
+         inner_corner(command.corner_radii.bottom_left, left_width, bottom_width),
+     };
++    if (has_superellipse) {
++        SkPathBuilder ring_path(SkPathFillType::kEvenOdd);
++        ring_path.addPath(to_skia_corner_path(rect, command.corner_radii));
++        ring_path.addPath(to_skia_corner_path(inner_rect, inner_corner_radii));
++        canvas.drawPath(ring_path.detach(), paint);
++        return;
++    }
+     canvas.drawDRRect(outer_rounded_rect, to_skia_rrect(inner_rect, inner_corner_radii), paint);
+ }
+ 
+diff --git a/Libraries/LibWeb/Rust/src/css/table_group_builder.rs b/Libraries/LibWeb/Rust/src/css/table_group_builder.rs
+--- a/Libraries/LibWeb/Rust/src/css/table_group_builder.rs
++++ b/Libraries/LibWeb/Rust/src/css/table_group_builder.rs
+@@ -1820,6 +1820,26 @@
+                 payload.border_top_left_radius = retained(property_id::BORDER_TOP_LEFT_RADIUS);
+                 payload.border_top_right_radius = retained(property_id::BORDER_TOP_RIGHT_RADIUS);
+                 payload.has_noninitial_border_radii = has_noninitial_border_radii;
++                payload.corner_top_left_shape = required_number(
++                    values
++                        .value(property_id::CORNER_TOP_LEFT_SHAPE)
++                        .expect("corner-top-left-shape has a computed value"),
++                );
++                payload.corner_top_right_shape = required_number(
++                    values
++                        .value(property_id::CORNER_TOP_RIGHT_SHAPE)
++                        .expect("corner-top-right-shape has a computed value"),
++                );
++                payload.corner_bottom_right_shape = required_number(
++                    values
++                        .value(property_id::CORNER_BOTTOM_RIGHT_SHAPE)
++                        .expect("corner-bottom-right-shape has a computed value"),
++                );
++                payload.corner_bottom_left_shape = required_number(
++                    values
++                        .value(property_id::CORNER_BOTTOM_LEFT_SHAPE)
++                        .expect("corner-bottom-left-shape has a computed value"),
++                );
+                 payload.border_image_source = retained(property_id::BORDER_IMAGE_SOURCE);
+                 payload.border_image_slice = retained(property_id::BORDER_IMAGE_SLICE);
+                 payload.border_image_width = retained(property_id::BORDER_IMAGE_WIDTH);
+@@ -2865,6 +2885,7 @@
+ fn required_number(data: &StyleValueData) -> f64 {
+     match data {
+         StyleValueData::Number { value } => *value,
++        StyleValueData::Superellipse { parameter } => required_number(parameter.data()),
+         data @ StyleValueData::Calculated { .. } => crate::css::calc::resolve_calculated_number_without_context(data)
+             .expect("a computed number calculation resolves without context"),
+         _ => unreachable!("a computed number slot holds a number or a calculation"),
+diff --git a/Libraries/LibWeb/Rust/src/painting/border_radii.rs b/Libraries/LibWeb/Rust/src/painting/border_radii.rs
+--- a/Libraries/LibWeb/Rust/src/painting/border_radii.rs
++++ b/Libraries/LibWeb/Rust/src/painting/border_radii.rs
+@@ -68,6 +68,7 @@
+ #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+ pub struct BorderRadii {
+     pub values: [CssPixels; 8],
++    pub shapes: [i32; 4],
+ }
+ 
+ impl BorderRadii {
+@@ -101,10 +102,11 @@
+         self.shrink(-top, -right, -bottom, -left);
+     }
+ 
+-    fn corner(&self, index: usize, converter: &DevicePixelConverter) -> CornerRadius {
++    fn corner(&self, index: usize, converter: &DevicePixelConverter, shape: f64) -> CornerRadius {
+         CornerRadius {
+             horizontal_radius: converter.floored_device_pixels(self.values[index]),
+             vertical_radius: converter.floored_device_pixels(self.values[index + 1]),
++            shape_milli: (shape * 1000.0).round() as i32,
+         }
+     }
+ 
+@@ -112,15 +114,20 @@
+         if !self.has_any_radius() {
+             return CornerRadii::default();
+         }
+-        self.corners_unconditionally(converter)
++        CornerRadii {
++            top_left: self.corner(0, converter, self.shapes[0] as f64 / 1000.0),
++            top_right: self.corner(2, converter, self.shapes[1] as f64 / 1000.0),
++            bottom_right: self.corner(4, converter, self.shapes[2] as f64 / 1000.0),
++            bottom_left: self.corner(6, converter, self.shapes[3] as f64 / 1000.0),
++        }
+     }
+ 
+     pub fn corners_unconditionally(&self, converter: &DevicePixelConverter) -> CornerRadii {
+         CornerRadii {
+-            top_left: self.corner(0, converter),
+-            top_right: self.corner(2, converter),
+-            bottom_right: self.corner(4, converter),
+-            bottom_left: self.corner(6, converter),
++            top_left: self.corner(0, converter, self.shapes[0] as f64 / 1000.0),
++            top_right: self.corner(2, converter, self.shapes[1] as f64 / 1000.0),
++            bottom_right: self.corner(4, converter, self.shapes[2] as f64 / 1000.0),
++            bottom_left: self.corner(6, converter, self.shapes[3] as f64 / 1000.0),
+         }
+     }
+ 
+diff --git a/Libraries/LibWeb/Rust/src/painting/display_list/commands.rs b/Libraries/LibWeb/Rust/src/painting/display_list/commands.rs
+--- a/Libraries/LibWeb/Rust/src/painting/display_list/commands.rs
++++ b/Libraries/LibWeb/Rust/src/painting/display_list/commands.rs
+@@ -546,7 +546,7 @@
+     mode
+ });
+ pub const INLINE_CLIP_ENTRY_SIZE: usize = std::mem::size_of::<DisplayListInlineClip>();
+-const _: () = assert!(INLINE_CLIP_ENTRY_SIZE == 64);
++const _: () = assert!(INLINE_CLIP_ENTRY_SIZE == 80);
+ 
+ #[derive(Clone, Copy, Debug, PartialEq)]
+ #[repr(C)]
+diff --git a/Libraries/LibWeb/Rust/src/painting/display_list/ffi_bytes.rs b/Libraries/LibWeb/Rust/src/painting/display_list/ffi_bytes.rs
+--- a/Libraries/LibWeb/Rust/src/painting/display_list/ffi_bytes.rs
++++ b/Libraries/LibWeb/Rust/src/painting/display_list/ffi_bytes.rs
+@@ -98,7 +98,8 @@
+ ffi_bytes_fields!(FloatMatrix4x4 { elements });
+ ffi_bytes_fields!(CornerRadius {
+     horizontal_radius,
+-    vertical_radius
++    vertical_radius,
++    shape_milli
+ });
+ ffi_bytes_fields!(CornerRadii {
+     top_left,
+diff --git a/Libraries/LibWeb/Rust/src/painting/record/paint/border.rs b/Libraries/LibWeb/Rust/src/painting/record/paint/border.rs
+--- a/Libraries/LibWeb/Rust/src/painting/record/paint/border.rs
++++ b/Libraries/LibWeb/Rust/src/painting/record/paint/border.rs
+@@ -1103,6 +1103,7 @@
+     let inner_corner = |corner: CornerRadius, horizontal_inset: i32, vertical_inset: i32| CornerRadius {
+         horizontal_radius: (corner.horizontal_radius - horizontal_inset).max(0),
+         vertical_radius: (corner.vertical_radius - vertical_inset).max(0),
++        shape_milli: corner.shape_milli,
+     };
+     let inner_corner_radii = CornerRadii {
+         top_left: inner_corner(corner_radii.top_left, left_inset, top_inset),
+@@ -1338,6 +1339,7 @@
+     let zero = CornerRadius {
+         horizontal_radius: 0,
+         vertical_radius: 0,
++        shape_milli: 1000,
+     };
+ 
+     // Disable border radii if the corresponding borders don't exist:
+diff --git a/Libraries/LibWeb/Rust/src/painting/visual_context/node_values.rs b/Libraries/LibWeb/Rust/src/painting/visual_context/node_values.rs
+--- a/Libraries/LibWeb/Rust/src/painting/visual_context/node_values.rs
++++ b/Libraries/LibWeb/Rust/src/painting/visual_context/node_values.rs
+@@ -369,7 +369,7 @@
+         border_box.width,
+         border_box.height,
+     );
+-    crate::painting::border_radii::normalize_border_radii_data(
++    let mut radii = crate::painting::border_radii::normalize_border_radii_data(
+         border_rect,
+         border_rect,
+         [
+@@ -378,7 +378,20 @@
+             border_radius_pair(&border.border_bottom_right_radius),
+             border_radius_pair(&border.border_bottom_left_radius),
+         ],
+-    )
++    );
++    let shapes = corner_shapes(style);
++    radii.shapes = shapes.map(|shape| (shape * 1000.0).round() as i32);
++    radii
++}
++
++pub(crate) fn corner_shapes(style: ComputedValuesView<'_>) -> [f64; 4] {
++    let border = style.border();
++    [
++        border.corner_top_left_shape,
++        border.corner_top_right_shape,
++        border.corner_bottom_right_shape,
++        border.corner_bottom_left_shape,
++    ]
+ }
+ 
+ pub(crate) fn padding_edge_border_radii(
+@@ -423,6 +436,7 @@
+             border_radius_pair(&border.border_bottom_left_radius),
+         ],
+     );
++    radii.shapes = corner_shapes(style).map(|shape| (shape * 1000.0).round() as i32);
+     // A corner only keeps its radius when the fragment piece retains both of the box's edges
+     // meeting there; corners cut by fragmentation are square.
+     const TOP_EDGE: u8 = 1 << 0;
+diff --git a/Libraries/LibWeb/Rust/src/painting/visual_context/serialize.rs b/Libraries/LibWeb/Rust/src/painting/visual_context/serialize.rs
+--- a/Libraries/LibWeb/Rust/src/painting/visual_context/serialize.rs
++++ b/Libraries/LibWeb/Rust/src/painting/visual_context/serialize.rs
+@@ -138,6 +138,7 @@
+     fn corner_radius(&mut self, radius: CornerRadius) {
+         self.i32(radius.horizontal_radius);
+         self.i32(radius.vertical_radius);
++        self.i32(radius.shape_milli);
+     }
+     fn corner_radii(&mut self, radii: CornerRadii) {
+         self.corner_radius(radii.top_left);
+@@ -252,6 +253,7 @@
+         Some(CornerRadius {
+             horizontal_radius: self.i32()?,
+             vertical_radius: self.i32()?,
++            shape_milli: self.i32()?,
+         })
+     }
+     fn corner_radii(&mut self) -> Option<CornerRadii> {
+diff --git a/Tests/LibWeb/Screenshot/input/css-corner-shape-squircle.html b/Tests/LibWeb/Screenshot/input/css-corner-shape-squircle.html
+new file mode 100644
+index 0000000..dd6d5f5
+--- /dev/null
++++ b/Tests/LibWeb/Screenshot/input/css-corner-shape-squircle.html
+@@ -0,0 +1,6 @@
++<!doctype html>
++<style>
++    body { background: white; font: 16px sans-serif; }
++    .shape { width: 180px; height: 140px; margin: 24px; border: 8px solid #242424; border-radius: 42px; background: #62a8ff; corner-shape: squircle; }
++</style>
++<div class="shape"></div>
