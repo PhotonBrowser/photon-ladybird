@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::time::Duration;

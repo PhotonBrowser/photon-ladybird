@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 mod build;
 mod doctor;
 mod metadata;
@@ -129,10 +130,7 @@ struct BuildArgs {
 
 #[derive(Debug, Args)]
 struct RunArgs {
-    /// Select the React/TypeScript frontend (default) or the deprecated QML fallback.
-    #[arg(long, value_parser = ["qml", "web"])]
-    ui: Option<String>,
-    /// Start the Vite dev server and run Photon against it for live frontend changes.
+    /// Run Photon with Vite and rebuild/restart after native or build configuration changes.
     /// `photon run dev` remains accepted as a shorthand for this flag.
     #[arg(long)]
     dev: bool,
@@ -175,18 +173,7 @@ fn run() -> Result<i32> {
         Command::Run(args) => {
             let (dev_mode, forwarded_args) = split_dev_args(args.dev, &args.application_args);
             if dev_mode {
-                if args.ui.as_deref() == Some("qml") {
-                    anyhow::bail!("Dev mode requires the React Web UI; remove `--ui qml`");
-                }
                 return build::run_dev(&repository, args.no_build, args.verbose, forwarded_args);
-            }
-            if args.ui.as_deref() == Some("qml") {
-                eprintln!(
-                    "{} {}\n  QML is deprecated and may be removed in a future release.\n  Use {} for the React Web UI.",
-                    style("⚠").yellow().bold(),
-                    style("Deprecated frontend").yellow().bold(),
-                    style("./photon run --ui web").cyan().bold()
-                );
             }
 
             build::run(
@@ -194,7 +181,6 @@ fn run() -> Result<i32> {
                 "Release",
                 args.no_build,
                 args.verbose,
-                args.ui.as_deref(),
                 &args.application_args,
             )
         }

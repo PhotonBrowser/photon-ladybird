@@ -1,9 +1,11 @@
+// SPDX-License-Identifier: GPL-3.0-only
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -35,7 +37,6 @@ pub fn run(
     preset: &str,
     no_build: bool,
     verbose: bool,
-    ui: Option<&str>,
     application_args: &[OsString],
 ) -> Result<i32> {
     crate::patches::ensure_materialized(repository)?;
@@ -55,50 +56,135 @@ pub fn run(
 
     let mut command = ladybird_command(repository);
     command.args(["run", "--preset", preset, "--no-build", "Photon"]);
-    if let Some(ui) = ui {
-        command.env("PHOTON_UI", ui);
-    }
     command.args(application_args);
     run_inherited(&mut command)
 }
 
 pub fn run_dev(repository: &Path, no_build: bool, verbose: bool, application_args: &[OsString]) -> Result<i32> {
     crate::patches::ensure_materialized(repository)?;
-    // Dev mode serves the frontend from Vite, so only the native binary is
-    // built here. The production bundle is built by plain `./photon run`.
     ensure_webui_dependencies(repository)?;
-    if photon_binary_needs_build(repository)? {
+    let mut sources = dev_source_snapshot(repository)?;
+    if photon_binary_needs_build(repository, &sources)? {
         if no_build {
             bail!("Photon must be built for dev mode; run `./photon build` first or omit `--no-build`");
         }
-        ui::step("Building Photon once for the dev session...");
+        ui::step("Building Photon for dev mode...");
         let code = build_native(repository, "Release", verbose, Some("Photon"))?;
         if code != 0 {
             return Ok(code);
         }
     }
 
-    let web_ui_directory = repository.join("Photon/WebUI");
-    let mut vite_command = Command::new("npm");
-    vite_command.args(["run", "dev"]).current_dir(&web_ui_directory);
     ui::header("Photon", Some("Run · Web UI dev mode"));
-    ui::step("Starting Vite with hot reload...");
-    let mut vite = crate::process::start_background(&mut vite_command)
-        .context("failed to start Vite; run `npm install` in Photon/WebUI first")?;
-
+    let mut vite = start_vite(repository)?;
     if let Err(error) = wait_for_vite(&mut vite) {
         crate::process::stop_background(&mut vite)?;
+        if crate::process::interrupt_requested() {
+            return Ok(130);
+        }
         return Err(error);
     }
     ui::ok("Vite ready", "http://127.0.0.1:5173 (frontend edits hot reload)");
+    let mut photon = match start_dev_photon(repository, application_args) {
+        Ok(photon) => Some(photon),
+        Err(error) => {
+            crate::process::stop_background(&mut vite)?;
+            return Err(error);
+        }
+    };
 
+    loop {
+        thread::sleep(Duration::from_millis(500));
+
+        if crate::process::interrupt_requested() {
+            if let Some(photon) = &mut photon {
+                crate::process::stop_managed(photon)?;
+            }
+            crate::process::stop_background(&mut vite)?;
+            return Ok(130);
+        }
+
+        if let Some(photon) = &mut photon {
+            if let Some(code) = crate::process::try_wait_managed(photon)? {
+                crate::process::stop_background(&mut vite)?;
+                return Ok(code);
+            }
+        }
+        if let Some(status) = vite.try_wait()? {
+            if let Some(photon) = &mut photon {
+                crate::process::stop_managed(photon)?;
+            }
+            bail!("Vite dev server exited unexpectedly (status {status})");
+        }
+
+        let next_sources = match dev_source_snapshot(repository) {
+            Ok(sources) => sources,
+            Err(error) => {
+                if let Some(photon) = &mut photon {
+                    crate::process::stop_managed(photon)?;
+                }
+                crate::process::stop_background(&mut vite)?;
+                return Err(error);
+            }
+        };
+        if next_sources == sources {
+            continue;
+        }
+
+        ui::step("Source or build configuration changed; restarting Photon...");
+        if let Some(photon) = &mut photon {
+            crate::process::stop_managed(photon)?;
+        }
+        photon = None;
+        crate::process::stop_background(&mut vite)?;
+        thread::sleep(Duration::from_millis(300));
+
+        crate::patches::ensure_materialized(repository)?;
+        sources = dev_source_snapshot(repository)?;
+        ensure_webui_dependencies(repository)?;
+        let code = build_native(repository, "Release", verbose, Some("Photon"))?;
+        if code == 130 || crate::process::interrupt_requested() {
+            return Ok(130);
+        }
+        let mut vite_result = start_vite(repository)?;
+        if let Err(error) = wait_for_vite(&mut vite_result) {
+            crate::process::stop_background(&mut vite_result)?;
+            if crate::process::interrupt_requested() {
+                return Ok(130);
+            }
+            return Err(error);
+        }
+        vite = vite_result;
+        if code == 0 {
+            photon = match start_dev_photon(repository, application_args) {
+                Ok(photon) => Some(photon),
+                Err(error) => {
+                    crate::process::stop_background(&mut vite)?;
+                    return Err(error);
+                }
+            };
+            ui::ok("Photon restarted", "Rust, C++, and build configuration changes applied");
+        } else {
+            ui::hint("Photon build failed; save another source change to retry.");
+        }
+    }
+}
+
+fn start_vite(repository: &Path) -> Result<Child> {
+    let web_ui_directory = webui_directory(repository);
+    let mut command = Command::new("npm");
+    command.args(["run", "dev"]).current_dir(web_ui_directory);
+    ui::step("Starting Vite with hot reload...");
+    crate::process::start_background(&mut command)
+        .context("failed to start Vite; run `npm install` in Photon/WebUI first")
+}
+
+fn start_dev_photon(repository: &Path, application_args: &[OsString]) -> Result<Child> {
     let mut command = ladybird_command(repository);
     command.args(["run", "--preset", "Release", "--no-build", "Photon"]);
     command.env("PHOTON_WEBUI_DEV_SERVER", "http://127.0.0.1:5173/");
     command.args(application_args);
-    let result = run_inherited(&mut command);
-    crate::process::stop_background(&mut vite)?;
-    result
+    crate::process::start_managed(&mut command)
 }
 
 fn webui_directory(repository: &Path) -> PathBuf {
@@ -252,7 +338,7 @@ fn vite_serves_photon(address: SocketAddr) -> bool {
     response.contains("200 OK") && response.contains("Photon Chrome") && response.contains("/@vite/client")
 }
 
-fn photon_binary_needs_build(repository: &Path) -> Result<bool> {
+fn photon_binary_needs_build(repository: &Path, sources: &HashMap<PathBuf, SourceFileState>) -> Result<bool> {
     let executable = if cfg!(windows) { "Photon.exe" } else { "Photon" };
     let binary = repository.join("Build/release/bin").join(executable);
     let Ok(binary_metadata) = fs::metadata(&binary) else {
@@ -261,40 +347,114 @@ fn photon_binary_needs_build(repository: &Path) -> Result<bool> {
     let built_at = binary_metadata
         .modified()
         .with_context(|| format!("failed to read {} timestamp", binary.display()))?;
-    if fs::metadata(repository.join("Photon/CMakeLists.txt"))?.modified()? > built_at {
-        return Ok(true);
-    }
-    for directory in ["Photon/App", "Photon/Bridge", "Photon/Rust"] {
-        if directory_has_newer_native_source(&repository.join(directory), built_at)? {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    Ok(sources.values().any(|source| source.modified > built_at))
 }
 
-fn directory_has_newer_native_source(directory: &Path, built_at: SystemTime) -> Result<bool> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SourceFileState {
+    modified: SystemTime,
+    size: u64,
+}
+
+fn dev_source_snapshot(repository: &Path) -> Result<HashMap<PathBuf, SourceFileState>> {
+    let mut sources = HashMap::new();
+    collect_dev_sources(repository, repository, &mut sources)?;
+    Ok(sources)
+}
+
+fn collect_dev_sources(
+    repository: &Path,
+    directory: &Path,
+    sources: &mut HashMap<PathBuf, SourceFileState>,
+) -> Result<()> {
     for entry in fs::read_dir(directory).with_context(|| format!("failed to read {}", directory.display()))? {
         let entry = entry?;
         let path = entry.path();
-        let metadata = entry.metadata()?;
-        if metadata.is_dir() {
-            if entry.file_name() == "target" {
-                continue;
-            }
-            if directory_has_newer_native_source(&path, built_at)? {
-                return Ok(true);
-            }
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
             continue;
         }
-        if matches!(
-            path.extension().and_then(|extension| extension.to_str()),
-            Some("cpp" | "h" | "rs" | "toml" | "lock")
-        ) && metadata.modified()? > built_at
-        {
-            return Ok(true);
+        if file_type.is_dir() {
+            if should_skip_dev_directory(&entry.file_name()) {
+                continue;
+            }
+            collect_dev_sources(repository, &path, sources)?;
+            continue;
         }
+        if !is_dev_build_input(&path) {
+            continue;
+        }
+        let metadata = entry.metadata()?;
+        sources.insert(
+            path.strip_prefix(repository)?.to_owned(),
+            SourceFileState {
+                modified: metadata.modified()?,
+                size: metadata.len(),
+            },
+        );
     }
-    Ok(false)
+    Ok(())
+}
+
+fn should_skip_dev_directory(name: &std::ffi::OsStr) -> bool {
+    matches!(
+        name.to_str(),
+        Some(".git" | ".cache" | ".venv" | "Build" | "Tools" | "dist" | "node_modules" | "target" | "vcpkg")
+    )
+}
+
+fn is_dev_build_input(path: &Path) -> bool {
+    let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    matches!(
+        path.extension().and_then(|extension| extension.to_str()),
+        Some(
+            "c" | "cc"
+                | "cpp"
+                | "cxx"
+                | "h"
+                | "hh"
+                | "hpp"
+                | "hxx"
+                | "inl"
+                | "ipp"
+                | "inc"
+                | "rs"
+                | "toml"
+                | "lock"
+                | "cmake"
+                | "py"
+                | "sh"
+                | "json"
+                | "yaml"
+                | "yml"
+                | "ini"
+                | "cfg"
+                | "ninja"
+                | "bzl"
+                | "patch"
+                | "qrc"
+                | "ui"
+                | "xml"
+                | "pro"
+                | "pri"
+        )
+    ) || matches!(
+        file_name,
+        "CMakeLists.txt"
+            | "Makefile"
+            | "makefile"
+            | "meson.build"
+            | "BUILD"
+            | "BUILD.bazel"
+            | "vite.config.ts"
+            | "tsconfig.json"
+            | "tsconfig.app.json"
+            | "tsconfig.node.json"
+            | "CMakePresets.json"
+            | "CMakeUserPresets.json"
+    ) || file_name.ends_with(".cmake.in")
+        || file_name.ends_with(".h.in")
+        || file_name.ends_with(".hpp.in")
 }
 
 pub fn clean(repository: &Path, preset: &str) -> Result<i32> {

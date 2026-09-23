@@ -1,9 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-only
 use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::mpsc;
 use std::thread;
 
@@ -12,6 +13,7 @@ use anyhow::{Context, Result, anyhow};
 const SAVED_TAIL_LINES: usize = 40;
 static CHILD_PROCESS_GROUP: AtomicI32 = AtomicI32::new(0);
 static BACKGROUND_PROCESS_GROUP: AtomicI32 = AtomicI32::new(0);
+static INTERRUPT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static CTRL_C_HANDLER: OnceLock<Result<(), String>> = OnceLock::new();
 
 pub struct ProcessOutcome {
@@ -98,6 +100,46 @@ pub fn run_inherited(command: &mut Command) -> Result<i32> {
     Ok(status_code(status))
 }
 
+pub fn start_managed(command: &mut Command) -> Result<Child> {
+    install_ctrl_c_handler()?;
+    configure_process_group(command);
+    let child = command.spawn().with_context(|| command_description(command))?;
+    set_active_child(&child);
+    Ok(child)
+}
+
+pub fn try_wait_managed(child: &mut Child) -> Result<Option<i32>> {
+    let Some(status) = child.try_wait().context("failed to check Photon process")? else {
+        return Ok(None);
+    };
+    clear_active_child(child);
+    Ok(Some(status_code(status)))
+}
+
+pub fn stop_managed(child: &mut Child) -> Result<()> {
+    if try_wait_managed(child)?.is_some() {
+        return Ok(());
+    }
+
+    interrupt_managed(child);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while std::time::Instant::now() < deadline {
+        if try_wait_managed(child)?.is_some() {
+            return Ok(());
+        }
+        thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    terminate_managed(child);
+    let _ = child.wait();
+    clear_active_child(child);
+    Ok(())
+}
+
+pub fn interrupt_requested() -> bool {
+    INTERRUPT_REQUESTED.load(Ordering::SeqCst)
+}
+
 pub fn start_background(command: &mut Command) -> Result<Child> {
     install_ctrl_c_handler()?;
     configure_process_group(command);
@@ -177,6 +219,7 @@ fn command_description(command: &Command) -> String {
 fn install_ctrl_c_handler() -> Result<()> {
     let result = CTRL_C_HANDLER.get_or_init(|| {
         ctrlc::set_handler(|| {
+            INTERRUPT_REQUESTED.store(true, Ordering::SeqCst);
             let process_group = CHILD_PROCESS_GROUP.load(Ordering::SeqCst);
             if process_group > 0 {
                 forward_interrupt(process_group);
@@ -221,6 +264,38 @@ fn set_active_child(child: &std::process::Child) {
     if let Ok(process_group) = i32::try_from(child.id()) {
         CHILD_PROCESS_GROUP.store(process_group, Ordering::SeqCst);
     }
+}
+
+fn clear_active_child(child: &std::process::Child) {
+    if let Ok(process_group) = i32::try_from(child.id()) {
+        let _ = CHILD_PROCESS_GROUP.compare_exchange(process_group, 0, Ordering::SeqCst, Ordering::SeqCst);
+    }
+}
+
+#[cfg(unix)]
+fn interrupt_managed(child: &Child) {
+    use nix::sys::signal::{Signal, killpg};
+    use nix::unistd::Pid;
+
+    let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGINT);
+}
+
+#[cfg(not(unix))]
+fn interrupt_managed(child: &mut Child) {
+    let _ = child.kill();
+}
+
+#[cfg(unix)]
+fn terminate_managed(child: &Child) {
+    use nix::sys::signal::{Signal, killpg};
+    use nix::unistd::Pid;
+
+    let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
+}
+
+#[cfg(not(unix))]
+fn terminate_managed(child: &mut Child) {
+    let _ = child.kill();
 }
 
 #[cfg(unix)]

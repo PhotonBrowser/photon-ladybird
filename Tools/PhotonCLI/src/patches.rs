@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -7,6 +8,12 @@ use console::style;
 
 use crate::metadata::{self, Patch};
 use crate::ui;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CheckoutState {
+    Pristine,
+    Materialized,
+}
 
 pub fn status(repository: &Path) -> Result<i32> {
     let patches = series(repository)?;
@@ -19,15 +26,16 @@ pub fn status(repository: &Path) -> Result<i32> {
 
     ui::header("Photon", Some(&format!("Patches · {}", patches.len())));
     let owned_paths = patch_paths(repository, &patches)?;
-    let mut all_applied = true;
+    let state = checkout_state(repository, &patches).ok();
+    if state.is_none() {
+        ui::failure("Ladybird checkout is neither pristine nor the exact registered patch series");
+    }
     for patch in &patches {
-        let path = patch_path(repository, patch)?;
-        let applied = Command::new("git")
-            .args(["apply", "--reverse", "--check"])
-            .arg(&path)
-            .current_dir(repository)
-            .status()?
-            .success();
+        let applied = match state {
+            Some(CheckoutState::Materialized) => true,
+            Some(CheckoutState::Pristine) => false,
+            None => patch_is_applied(repository, patch)?,
+        };
         if applied {
             println!(
                 "  {} {:<8} {} {}",
@@ -37,7 +45,6 @@ pub fn status(repository: &Path) -> Result<i32> {
                 style(format!("({})", patch.area)).dim()
             );
         } else {
-            all_applied = false;
             println!(
                 "  {} {:<8} {} {}",
                 style("○").yellow().bold(),
@@ -61,13 +68,8 @@ pub fn status(repository: &Path) -> Result<i32> {
         }
         return Ok(1);
     }
-    if all_applied {
-        if let Err(error) = verify_materialized_files(repository, &patches) {
-            ui::failure(format!(
-                "Materialized files differ from the registered series: {error:#}"
-            ));
-            return Ok(1);
-        }
+    if state.is_none() {
+        return Ok(1);
     }
     Ok(0)
 }
@@ -85,15 +87,8 @@ pub fn check(repository: &Path) -> Result<i32> {
     fs::remove_dir_all(&temporary).context("failed to remove temporary patch checkout")?;
     result?;
     let owned_paths = patch_paths(repository, &patches)?;
-    if patches
-        .iter()
-        .map(|patch| patch_is_applied(repository, patch))
-        .collect::<Result<Vec<_>>>()?
-        .iter()
-        .all(|applied| *applied)
-    {
-        verify_materialized_files(repository, &patches)?;
-    }
+    checkout_state(repository, &patches)
+        .context("Ladybird checkout is neither pristine nor the exact registered patch series")?;
     let direct = changed_paths(repository)?
         .into_iter()
         .filter(|path| is_ladybird_path(path) && !owned_paths.contains(path))
@@ -145,6 +140,43 @@ fn verify_materialized_files(repository: &Path, patches: &[Patch]) -> Result<()>
     result
 }
 
+fn verify_pristine_files(repository: &Path, patches: &[Patch]) -> Result<()> {
+    let upstream = metadata::read_upstream(&repository.join("Meta/Photon/upstream.toml"))?;
+    for path in patch_paths(repository, patches)? {
+        let object = format!("{}:{}", upstream.revision, path.display());
+        let exists = Command::new("git")
+            .args(["cat-file", "-e", &object])
+            .current_dir(repository)
+            .status()?
+            .success();
+        let expected = if exists {
+            let output = Command::new("git")
+                .args(["show", &object])
+                .current_dir(repository)
+                .output()?;
+            if !output.status.success() {
+                bail!("failed to read recorded upstream file {}", path.display());
+            }
+            Some(output.stdout)
+        } else {
+            None
+        };
+        let actual = fs::read(repository.join(&path)).ok();
+        if actual != expected {
+            bail!("{} differs from recorded pristine upstream", path.display());
+        }
+    }
+    Ok(())
+}
+
+fn checkout_state(repository: &Path, patches: &[Patch]) -> Result<CheckoutState> {
+    if verify_materialized_files(repository, patches).is_ok() {
+        return Ok(CheckoutState::Materialized);
+    }
+    verify_pristine_files(repository, patches)?;
+    Ok(CheckoutState::Pristine)
+}
+
 /// Ensure the checked-out Ladybird files contain exactly the registered patch series.
 /// A pristine base is patched in order; partial or divergent states are never overwritten.
 pub fn ensure_materialized(repository: &Path) -> Result<()> {
@@ -152,31 +184,26 @@ pub fn ensure_materialized(repository: &Path) -> Result<()> {
     let upstream = metadata::read_upstream(&repository.join("Meta/Photon/upstream.toml"))?;
     validate_recorded_base(repository, &upstream.revision)
         .context("run `./photon sync --record` to advance the base before building")?;
-    let applied = patches
-        .iter()
-        .map(|patch| patch_is_applied(repository, patch))
-        .collect::<Result<Vec<_>>>()?;
-    if applied.iter().all(|state| *state) {
-        verify_materialized_files(repository, &patches)?;
-        let owned_paths = patch_paths(repository, &patches)?;
-        let direct = changed_paths(repository)?
-            .into_iter()
-            .filter(|path| is_ladybird_path(path) && !owned_paths.contains(path))
-            .collect::<Vec<_>>();
-        if !direct.is_empty() {
-            bail!(
-                "unrepresented direct modifications to upstream Ladybird files: {}",
-                direct
-                    .iter()
-                    .map(|path| path.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
+    match checkout_state(repository, &patches)? {
+        CheckoutState::Materialized => {
+            let owned_paths = patch_paths(repository, &patches)?;
+            let direct = changed_paths(repository)?
+                .into_iter()
+                .filter(|path| is_ladybird_path(path) && !owned_paths.contains(path))
+                .collect::<Vec<_>>();
+            if !direct.is_empty() {
+                bail!(
+                    "unrepresented direct modifications to upstream Ladybird files: {}",
+                    direct
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            return Ok(());
         }
-        return Ok(());
-    }
-    if applied.iter().any(|state| *state) {
-        bail!("patch series is only partially materialized; run `./photon patches status` and resolve it manually");
+        CheckoutState::Pristine => {}
     }
     let unexpected = changed_paths(repository)?
         .into_iter()
@@ -201,8 +228,6 @@ pub fn ensure_materialized(repository: &Path) -> Result<()> {
                 .current_dir(repository),
             &format!("check patch {} against checkout", patch.id),
         )?;
-    }
-    for patch in &patches {
         successful(
             Command::new("git")
                 .arg("apply")
@@ -242,21 +267,13 @@ pub(crate) fn validate_sync_worktree(repository: &Path) -> Result<bool> {
     }
 
     let patches = series(repository)?;
-    let applied = patches
-        .iter()
-        .map(|patch| patch_is_applied(repository, patch))
-        .collect::<Result<Vec<_>>>()?;
-    if applied.iter().any(|state| *state) && applied.iter().any(|state| !*state) {
-        bail!("patch series is only partially materialized; resolve it manually before syncing");
-    }
-    if !applied.iter().all(|state| *state) {
+    if checkout_state(repository, &patches)? == CheckoutState::Pristine {
         if changed_paths(repository)?.is_empty() {
             return Ok(false);
         }
         bail!("working tree is not clean; commit or stash your work before syncing");
     }
 
-    verify_materialized_files(repository, &patches)?;
     let owned_paths = patch_paths(repository, &patches)?;
     let unexpected = changed_paths(repository)?
         .into_iter()

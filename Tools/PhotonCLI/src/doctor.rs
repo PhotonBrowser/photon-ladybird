@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
@@ -50,7 +51,6 @@ pub fn run(repository: &Path) -> Result<i32> {
     ui::section("Qt");
     let minimum_qt = qt_requirement(repository).unwrap_or(FALLBACK_MINIMUM_QT);
     blocking_problems += check_qt(minimum_qt);
-    blocking_problems += check_qt_quick();
 
     ui::section("Build dependencies");
     for (label, program) in [
@@ -162,22 +162,6 @@ fn check_qt(required: Version) -> i32 {
 
     ui::fail("Qt", format!("Not found (required: Qt >= {required})"));
     1
-}
-
-fn check_qt_quick() -> i32 {
-    let output = Command::new("pkg-config")
-        .args(["--modversion", "Qt6QuickWidgets"])
-        .output();
-    let Ok(output) = output else {
-        ui::fail("Qt Quick", "pkg-config could not inspect Qt6QuickWidgets");
-        return 1;
-    };
-    if !output.status.success() {
-        ui::fail("Qt Quick", "Qt6QuickWidgets not found");
-        return 1;
-    }
-    ui::ok("Qt Quick", String::from_utf8_lossy(&output.stdout).trim());
-    0
 }
 
 fn check_webui_dependencies(repository: &Path) -> i32 {
