@@ -29,3 +29,9 @@ id = "0005"
 file = "ladybird/0005-support-css-corner-shapes.patch"
 description = "Carry CSS corner shapes through Ladybird painting and serialization"
 area = "Rendering"
+
+[[patches]]
+id = "0006"
+file = "ladybird/0006-webgl-cpu-surface-without-dmabuf.patch"
+description = "Keep WebGL available when Vulkan canvas sharing is unavailable"
+area = "Rendering"
