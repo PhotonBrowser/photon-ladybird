@@ -2,6 +2,7 @@
 @import "../node_modules/@heroui/styles/dist/heroui.min.css";
 
 :root {
+    --tooltip-delay: 500ms;
     color-scheme: light;
     font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     font-synthesis: none;
@@ -312,9 +313,11 @@ button {
 }
 
 .photon-tab-strip {
-    width: 100%;
+    position: relative;
+    width: auto;
+    min-width: 0;
     gap: var(--photon-space-2);
-    flex: 1;
+    flex: 1 1 auto;
 }
 
 .photon-tabs {
@@ -322,24 +325,68 @@ button {
     width: max-content;
     max-width: calc(100% - var(--photon-control-size) - var(--photon-space-2));
     gap: var(--photon-space-1);
-    overflow: hidden;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+}
+
+.photon-tabs::-webkit-scrollbar {
+    display: none;
+}
+
+.photon-tab-tooltip-trigger {
+    display: flex;
+    min-width: 0;
+    max-width: var(--photon-tab-max-width);
+    flex: 1 1 var(--photon-tab-default-width);
 }
 
 .photon-tab-entry {
     position: relative;
     display: flex;
-    min-width: var(--photon-tab-min-width);
+    min-width: 0;
     max-width: var(--photon-tab-max-width);
     height: var(--photon-tab-height);
     width: var(--photon-tab-default-width);
     flex: 1 1 var(--photon-tab-default-width);
     align-items: center;
     gap: var(--photon-space-1);
-    overflow: hidden;
+    overflow: visible;
     border-radius: var(--photon-radius-control);
     transition:
         background-color var(--photon-motion-fast) var(--photon-ease-standard),
         scale var(--photon-motion-fast) var(--photon-ease-standard);
+}
+
+.photon-tab-tooltip {
+    display: flex;
+    width: max-content;
+    max-width: min(320px, calc(100vw - var(--photon-space-8)));
+    flex-direction: column;
+    gap: var(--photon-space-2);
+    padding: var(--photon-space-4) var(--photon-space-5);
+    border: 1px solid var(--photon-color-border);
+    border-radius: var(--photon-radius-control);
+    background: var(--photon-color-surface-raised);
+    box-shadow: var(--photon-shadow-popover);
+    color: var(--photon-color-text-primary);
+}
+
+.photon-tab-hover-title,
+.photon-tab-hover-site {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.photon-tab-hover-title {
+    font-size: var(--photon-font-size-body);
+    line-height: var(--photon-line-height-compact);
+}
+
+.photon-tab-hover-site {
+    color: var(--photon-color-text-secondary);
+    font-size: var(--photon-font-size-caption);
 }
 
 .photon-tab-entry:hover {
@@ -519,6 +566,7 @@ button {
     width: var(--photon-control-size);
     min-width: var(--photon-control-size);
     height: var(--photon-control-size);
+    flex: 0 0 var(--photon-control-size);
     border-radius: var(--photon-radius-control);
 }
 

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
+import { memo } from "react";
+
 import logo from "../assets/photon-logo.svg";
 
-export function NewTabPage(): React.JSX.Element {
+export const NewTabPage = memo(function NewTabPage(): React.JSX.Element {
     return (
         <main aria-labelledby="new-tab-title" className="photon-internal-page photon-new-tab-page">
             <div className="photon-new-tab-content">
@@ -12,4 +14,4 @@ export function NewTabPage(): React.JSX.Element {
             </div>
         </main>
     );
-}
+});
