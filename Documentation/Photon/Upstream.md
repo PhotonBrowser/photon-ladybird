@@ -27,13 +27,12 @@ git fetch upstream
 Sync with upstream through the CLI:
 
 ```bash
-./photon sync --fetch-only   # fetch and report the divergence, change nothing
-./photon sync                # fetch, verify, and merge the upstream tracking branch
-./photon sync --record       # merge (if needed), record the new base, materialize patches
+./photon sync                # complete the sync and prepare the checkout
+./photon sync --fetch-only    # preview divergence; change nothing
 ```
 
-`sync` refuses to run with Photon source changes, staged changes, or a detached HEAD. It accepts the exact registered Ladybird patch materialization and temporarily removes it for the merge. It verifies the patch series against the fetched target and merged checkout. A plain `sync` leaves the series unapplied and requires `sync --record` before building; `--record` advances only the `revision` line in `Meta/Photon/upstream.toml` and materializes the verified patches against that base. Sync never rewrites history, auto-resolves conflicts, or pushes. A merge conflict stops the command for manual resolution.
+`sync` refuses to run with Photon source changes, staged changes, or a detached HEAD. It accepts the exact registered Ladybird patch materialization and temporarily removes it for the merge. It verifies the full patch series, merges upstream, records the verified base, and rematerializes the patches in one command. Sync never rewrites history, auto-resolves conflicts, or pushes.
 
-To update, begin from a clean topic branch, fetch `upstream`, and rebase or merge according to the repository's policy. Resolve conflicts manually, rebuild, run the focused tests, and update the recorded revision only after the result is verified. Refresh any affected files in `Patches/ladybird` so the series applies to the new base.
+If a patch no longer applies, sync merges upstream but leaves the series unapplied and the recorded base unchanged. Update the affected patch files and `Patches/series.toml`, then run the same `./photon sync` again. That second run accepts only unstaged changes under `Patches/`, verifies Ladybird files are pristine at the merged upstream, checks the entire ordered series, records the base, and materializes it. No temporary patch-refresh commit is needed. If Git reports merge conflicts, resolve them manually first; sync will not decide how an engine change should be reconciled.
 
-Photon tooling does not reset branches, discard work, resolve conflicts, rewrite history, or push, apart from `sync`'s explicit fetch and conflict-free merge. A conflict is an explicit maintenance task.
+Photon tooling does not reset branches, discard work, resolve conflicts, rewrite history, or push. For patch conflicts, refresh only the patch representation and rerun sync; for Git merge conflicts, resolve them manually and verify with `./photon patches check`.

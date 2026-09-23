@@ -140,7 +140,7 @@ run ./photon patches status and ./photon patches check
 build/test
 ```
 
-Prefer the smallest generic Ladybird change; never add Photon product policy or names to engine code. Do not create patches for Photon-owned files. Never leave an intentional engine change only in the checkout or tell a future agent to patch it later. Do not silently move the recorded base. Use `./photon upstream status`, `./photon sync --fetch-only`, and `./photon sync --record` for upstream operations; sync refuses unclean or unrepresented edits and does not resolve conflicts automatically.
+Prefer the smallest generic Ladybird change; never add Photon product policy or names to engine code. Do not create patches for Photon-owned files. Never leave an intentional engine change only in the checkout or tell a future agent to patch it later. Do not silently move the recorded base. Use `./photon upstream status` to inspect tracking, `./photon sync --fetch-only` to preview, and `./photon sync` to complete an upstream sync, record the verified base, and materialize the series. If a patch needs refreshing, edit only `Patches/` and rerun `./photon sync`; no temporary commit is needed. Sync refuses staged changes or unrelated work and does not resolve Git conflicts automatically.
 
 `Patches/series.toml` is the current patch list. Do not duplicate a hard-coded list here; document semantics and invariants instead.
 

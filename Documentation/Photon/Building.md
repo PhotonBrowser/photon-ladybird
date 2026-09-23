@@ -11,7 +11,7 @@ From the repository root:
 
 `./photon` delegates configuration and compilation to `Meta/ladybird.py`, using the Qt frontend and the normal Ladybird vcpkg/build environment. The first Ladybird dependency bootstrap can be expensive. Later builds target only `photon` and are incremental.
 
-Before building or running, the CLI verifies and materializes `Patches/series.toml` over the recorded upstream base as needed. It refuses to build when committed Ladybird files differ from the recorded base or when patches are partial or divergent. After a plain upstream merge, run `./photon sync --record` to record the verified base and materialize its patch series. See [Patches.md](Patches.md) for the patch checks and sync behavior.
+Before building or running, the CLI verifies and materializes `Patches/series.toml` over the recorded upstream base as needed. It refuses to build when committed Ladybird files differ from the recorded base or when patches are partial or divergent. Run `./photon sync` to merge upstream, record the verified base, and materialize its patch series. See [Patches.md](Patches.md) for the patch checks and sync behavior.
 
 Use `./photon run --no-build` to launch an existing binary. `./photon clean` removes the Photon executable and Photon-specific generated CMake output for the selected preset; it preserves vcpkg and shared Cargo artifacts.
 
