@@ -34,22 +34,15 @@ static QString qstring_from_photon_utf8(PhotonUtf8 value)
     return QString::fromUtf8(reinterpret_cast<char const*>(value.data), static_cast<qsizetype>(value.len));
 }
 
-static PhotonBrowserCommand prepare_navigation(PhotonBrowserState* state, QString const& input)
+static PhotonAppEffects dispatch_app_command(PhotonBrowserState* state, uint32_t kind, uint64_t value = 0, QList<uint64_t> const* ids = nullptr, QString const& argument = { })
 {
-    auto utf8 = input.toUtf8();
-    return photon_browser_prepare_navigate(
-        state,
-        reinterpret_cast<uint8_t const*>(utf8.constData()),
-        static_cast<size_t>(utf8.size()));
-}
-
-static PhotonAppEffects dispatch_app_command(PhotonBrowserState* state, uint32_t kind, uint64_t value = 0, QList<uint64_t> const* ids = nullptr)
-{
+    auto utf8 = argument.toUtf8();
     PhotonAppCommand command {
         .kind = kind,
         .value = value,
         .ids = ids ? ids->constData() : nullptr,
         .ids_len = ids ? static_cast<size_t>(ids->size()) : 0,
+        .argument = { reinterpret_cast<uint8_t const*>(utf8.constData()), static_cast<size_t>(utf8.size()) },
     };
     return photon_app_dispatch(state, command);
 }
@@ -248,22 +241,24 @@ Ladybird::WebContentView& BrowserView::create_view(uint64_t tab_id)
 
 bool BrowserView::navigate(QString const& input)
 {
-    return apply_command(prepare_navigation(m_state, input));
+    auto effects = dispatch_app_command(m_state, PhotonAppCommandKind_Navigate, 0, nullptr, input);
+    apply_app_effects(effects);
+    return effects.accepted;
 }
 
 void BrowserView::reload()
 {
-    apply_command(photon_browser_prepare_reload(m_state));
+    apply_app_effects(dispatch_app_command(m_state, PhotonAppCommandKind_Reload));
 }
 
 void BrowserView::go_back()
 {
-    apply_command(photon_browser_prepare_back(m_state));
+    apply_app_effects(dispatch_app_command(m_state, PhotonAppCommandKind_Back));
 }
 
 void BrowserView::go_forward()
 {
-    apply_command(photon_browser_prepare_forward(m_state));
+    apply_app_effects(dispatch_app_command(m_state, PhotonAppCommandKind_Forward));
 }
 
 void BrowserView::focus_web_content()
@@ -295,7 +290,17 @@ void BrowserView::select_tab(uint64_t tab_id)
 
 void BrowserView::select_adjacent_tab(bool previous)
 {
-    select_tab(photon_browser_adjacent_tab_id(m_state, previous));
+    apply_app_effects(dispatch_app_command(m_state, previous ? PhotonAppCommandKind_SelectPreviousTab : PhotonAppCommandKind_SelectNextTab));
+}
+
+void BrowserView::close_active_tab()
+{
+    apply_app_effects(dispatch_app_command(m_state, PhotonAppCommandKind_CloseActiveTab));
+}
+
+bool BrowserView::request_focus_address()
+{
+    return dispatch_app_command(m_state, PhotonAppCommandKind_FocusAddress).focus_address;
 }
 
 void BrowserView::close_tab(uint64_t tab_id)
@@ -341,6 +346,37 @@ void BrowserView::apply_app_effects(PhotonAppEffects const& effects)
 {
     if (!effects.accepted)
         return;
+    if (effects.requested_close_tab_id != 0)
+        close_tab(effects.requested_close_tab_id);
+    switch (effects.navigation_kind) {
+    case 0:
+        break;
+    case 1: {
+        auto* view = m_views.value(effects.navigation_tab_id);
+        if (!view)
+            break;
+        auto parsed_url = ak_url_from_qstring(qstring_from_photon_utf8(effects.navigation_target));
+        if (!parsed_url.has_value())
+            break;
+        view->show();
+        view->load(parsed_url.release_value());
+        break;
+    }
+    case 2:
+        if (auto* view = m_views.value(effects.navigation_tab_id))
+            view->reload();
+        break;
+    case 3:
+        if (auto* view = m_views.value(effects.navigation_tab_id))
+            view->traverse_the_history_by_delta(-1);
+        break;
+    case 4:
+        if (auto* view = m_views.value(effects.navigation_tab_id))
+            view->traverse_the_history_by_delta(1);
+        break;
+    default:
+        VERIFY_NOT_REACHED();
+    }
     if (effects.created_tab_id != 0)
         create_view(effects.created_tab_id);
     Ladybird::WebContentView* removed_view = nullptr;
@@ -356,6 +392,8 @@ void BrowserView::apply_app_effects(PhotonAppEffects const& effects)
         removed_view->deleteLater();
     if (effects.theme_changed || effects.force_dark_pages_changed)
         refresh_preferred_color_scheme();
+    else if (effects.navigation_kind == 1)
+        emit_active_tab_state_changed();
     else if (effects.active_tab_changed) {
         if (!active_tab_signal_emitted)
             emit active_tab_changed();
@@ -372,47 +410,11 @@ void BrowserView::load_initial_url()
         warnln("Photon: Rust core supplied an invalid initial URL");
 }
 
-bool BrowserView::apply_command(PhotonBrowserCommand const& command)
-{
-    switch (command.kind) {
-    case PhotonBrowserCommandKind_Navigate: {
-        auto url = qstring_from_photon_utf8(command.argument);
-        auto parsed_url = ak_url_from_qstring(url);
-        if (!parsed_url.has_value())
-            return false;
-        auto utf8 = url.toUtf8();
-        if (!photon_browser_begin_navigation(m_state, active_tab_id(), reinterpret_cast<uint8_t const*>(utf8.constData()), static_cast<size_t>(utf8.size())))
-            return false;
-        if (is_internal_page()) {
-            emit_active_tab_state_changed();
-            return true;
-        }
-        widget().show();
-        widget().load(parsed_url.release_value());
-        sync_view_visibility();
-        emit_active_tab_state_changed();
-        return true;
-    }
-    case PhotonBrowserCommandKind_Reload:
-        if (!is_internal_page())
-            widget().reload();
-        return true;
-    case PhotonBrowserCommandKind_Back:
-        widget().traverse_the_history_by_delta(-1);
-        return true;
-    case PhotonBrowserCommandKind_Forward:
-        widget().traverse_the_history_by_delta(1);
-        return true;
-    case PhotonBrowserCommandKind_None:
-        return false;
-    }
-    VERIFY_NOT_REACHED();
-}
-
 void BrowserView::update_url(uint64_t tab_id, QString const& url)
 {
     auto utf8 = url.toUtf8();
-    if (photon_browser_set_url(m_state, tab_id, reinterpret_cast<uint8_t const*>(utf8.constData()), static_cast<size_t>(utf8.size())) == 0)
+    PhotonPageObservation observation { 1, tab_id, { reinterpret_cast<uint8_t const*>(utf8.constData()), static_cast<size_t>(utf8.size()) }, 0, 0 };
+    if (photon_app_observe_page(m_state, observation) == 0)
         return;
     emit browser_state_changed();
     if (tab_id == active_tab_id())
@@ -422,7 +424,8 @@ void BrowserView::update_url(uint64_t tab_id, QString const& url)
 void BrowserView::update_title(uint64_t tab_id, QString const& title)
 {
     auto utf8 = title.toUtf8();
-    if (photon_browser_set_title(m_state, tab_id, reinterpret_cast<uint8_t const*>(utf8.constData()), static_cast<size_t>(utf8.size())) == 0)
+    PhotonPageObservation observation { 2, tab_id, { reinterpret_cast<uint8_t const*>(utf8.constData()), static_cast<size_t>(utf8.size()) }, 0, 0 };
+    if (photon_app_observe_page(m_state, observation) == 0)
         return;
     emit browser_state_changed();
     if (tab_id == active_tab_id())
@@ -431,7 +434,8 @@ void BrowserView::update_title(uint64_t tab_id, QString const& title)
 
 void BrowserView::update_loading(uint64_t tab_id, bool loading)
 {
-    if (photon_browser_set_loading(m_state, tab_id, loading) == 0)
+    PhotonPageObservation observation { 3, tab_id, { }, static_cast<uint8_t>(loading), 0 };
+    if (photon_app_observe_page(m_state, observation) == 0)
         return;
     emit browser_state_changed();
     if (tab_id == active_tab_id()) {
@@ -446,7 +450,8 @@ void BrowserView::update_navigation_capabilities(uint64_t tab_id)
     auto* view = m_views.value(tab_id);
     if (!view)
         return;
-    if (photon_browser_set_navigation_capabilities(m_state, tab_id, view->navigate_back_action().enabled(), view->navigate_forward_action().enabled()) == 0)
+    PhotonPageObservation observation { 4, tab_id, { }, static_cast<uint8_t>(view->navigate_back_action().enabled()), static_cast<uint8_t>(view->navigate_forward_action().enabled()) };
+    if (photon_app_observe_page(m_state, observation) == 0)
         return;
     emit browser_state_changed();
     if (tab_id == active_tab_id())

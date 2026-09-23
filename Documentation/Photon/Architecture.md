@@ -22,7 +22,7 @@ Engine and application event
 
 Ladybird callback / Qt action
     ▼
-BrowserView → Rust BrowserState snapshot
+BrowserView → grouped partial PageObservation → Rust PhotonApp snapshot
     ▼
 ChromeSurface → photon-state event → React subscribers
 ```
@@ -31,12 +31,12 @@ ChromeSurface → photon-state event → React subscribers
 
 - `Photon/WebUI` owns browser chrome composition, address editing, popovers, and internal-page presentation. It sends typed commands and renders snapshots; it does not own browser or tab state.
 - `Photon/Rust` owns the Photon application decisions and persistent browser state: tab lifecycle/order, active-tab identity, internal-page routes, appearance preferences, and each tab's URL, title, loading state, and history capabilities. `PhotonApp` dispatches typed tab and preference commands and returns typed integration effects. Ladybird remains authoritative for the history of every web tab.
-- `Photon/Bridge` adapts Rust and Ladybird to Qt. `BrowserView` owns one opaque Rust application-state handle and a separate `WebContentView` for each tab. It submits typed application commands, applies Rust-returned effects to native views, and reports engine callbacks back to Rust. `WindowScene` attaches the active view and coordinates composition/input.
+- `Photon/Bridge` adapts Rust and Ladybird to Qt. `BrowserView` owns one opaque Rust application-state handle and a separate `WebContentView` for each tab. It submits typed application commands, executes Rust-returned effects against native views, and reports partial engine observations back to Rust. `WindowScene` attaches the active view and coordinates composition/input.
 - Ladybird's existing `WebContentView` handles rendering and input. Photon compiles that frontend implementation directly from `UI/Qt`; it does not copy or fork it.
 
 Ladybird is authoritative for the actual current URL, including redirects, links, same-document navigation, and history traversal. It is also authoritative for page titles, loading, and whether history traversal is available. Rust represents that engine-reported state for Photon; a submitted address is never treated as the final URL.
 
-The C ABI uses one opaque `PhotonBrowserState` allocation per window. A single `photon_app_dispatch` call carries typed tab/preference operations into Rust and returns the domain effects needed by the adapter. Rust passes tab identifiers and serializable snapshots only; Ladybird pointers remain in C++.
+The C ABI uses one opaque `PhotonBrowserState` allocation per window. A single `photon_app_dispatch` call carries typed tab, navigation, shortcut, and preference operations into Rust and returns the domain effects needed by the adapter. A grouped `photon_app_observe_page` operation accepts the independent partial observations emitted by Ladybird. Rust passes tab identifiers and serializable snapshots only; Ladybird pointers remain in C++.
 
 The current Ladybird Qt surface is a `QWidget`/`QRhiWidget`. Photon uses a small QWidget scene coordinator at the integration edge.
 

@@ -6,8 +6,8 @@
 
 use std::{slice, str};
 
-use crate::application::{AppCommand, AppEffects, PhotonApp};
-use crate::browser::{BrowserCommand, BrowserState, NavigationCapabilities, ThemeMode};
+use crate::application::{AppCommand, AppEffects, NativeNavigation, PageObservation, PhotonApp};
+use crate::browser::{BrowserState, NavigationCapabilities, ThemeMode};
 
 #[repr(C)]
 pub struct PhotonUtf8 {
@@ -15,19 +15,13 @@ pub struct PhotonUtf8 {
     pub len: usize,
 }
 
-#[repr(C)]
-pub enum PhotonBrowserCommandKind {
-    None,
-    Navigate,
-    Reload,
-    Back,
-    Forward,
-}
-
-#[repr(C)]
-pub struct PhotonBrowserCommand {
-    pub kind: PhotonBrowserCommandKind,
-    pub argument: PhotonUtf8,
+impl Default for PhotonUtf8 {
+    fn default() -> Self {
+        Self {
+            data: std::ptr::null(),
+            len: 0,
+        }
+    }
 }
 
 #[repr(C)]
@@ -36,6 +30,47 @@ pub struct PhotonAppCommand {
     pub value: u64,
     pub ids: *const u64,
     pub ids_len: usize,
+    pub argument: PhotonUtf8,
+}
+
+#[repr(C)]
+pub struct PhotonPageObservation {
+    pub kind: u32,
+    pub tab_id: u64,
+    pub text: PhotonUtf8,
+    pub first: u8,
+    pub second: u8,
+}
+
+/// # Safety
+/// `state` must be a live Photon state and `observation.text` must remain readable for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn photon_app_observe_page(
+    state: *mut PhotonBrowserState,
+    observation: PhotonPageObservation,
+) -> u8 {
+    let Some(state) = (unsafe { state.as_mut() }) else {
+        return 0;
+    };
+    let event = match observation.kind {
+        1 | 2 => {
+            let Some(text) = (unsafe { input_utf8(observation.text.data, observation.text.len) }) else {
+                return 0;
+            };
+            if observation.kind == 1 {
+                PageObservation::Url(text)
+            } else {
+                PageObservation::Title(text)
+            }
+        }
+        3 => PageObservation::Loading(observation.first != 0),
+        4 => PageObservation::Navigation(NavigationCapabilities {
+            can_go_back: observation.first != 0,
+            can_go_forward: observation.second != 0,
+        }),
+        _ => return 0,
+    };
+    state.app.observe_page(observation.tab_id, event).into()
 }
 
 #[repr(u32)]
@@ -48,6 +83,14 @@ enum PhotonAppCommandKind {
     SetTheme = 6,
     SetDimOverlays = 7,
     SetForceDarkPages = 8,
+    Navigate = 9,
+    Reload = 10,
+    Back = 11,
+    Forward = 12,
+    CloseActiveTab = 13,
+    SelectPreviousTab = 14,
+    SelectNextTab = 15,
+    FocusAddress = 16,
 }
 
 impl TryFrom<u32> for PhotonAppCommandKind {
@@ -63,6 +106,14 @@ impl TryFrom<u32> for PhotonAppCommandKind {
             6 => Ok(Self::SetTheme),
             7 => Ok(Self::SetDimOverlays),
             8 => Ok(Self::SetForceDarkPages),
+            9 => Ok(Self::Navigate),
+            10 => Ok(Self::Reload),
+            11 => Ok(Self::Back),
+            12 => Ok(Self::Forward),
+            13 => Ok(Self::CloseActiveTab),
+            14 => Ok(Self::SelectPreviousTab),
+            15 => Ok(Self::SelectNextTab),
+            16 => Ok(Self::FocusAddress),
             _ => Err(()),
         }
     }
@@ -79,10 +130,22 @@ pub struct PhotonAppEffects {
     pub force_dark_pages_changed: u8,
     pub created_tab_id: u64,
     pub removed_tab_id: u64,
+    pub requested_close_tab_id: u64,
+    pub navigation_kind: u32,
+    pub navigation_tab_id: u64,
+    pub navigation_target: PhotonUtf8,
+    pub focus_address: u8,
 }
 
-impl From<AppEffects> for PhotonAppEffects {
-    fn from(effects: AppEffects) -> Self {
+impl PhotonAppEffects {
+    fn from_effects(effects: AppEffects, argument: &str) -> Self {
+        let (navigation_kind, navigation_tab_id) = match effects.navigation {
+            Some(NativeNavigation::Navigate { tab_id, .. }) => (1, tab_id),
+            Some(NativeNavigation::Reload { tab_id }) => (2, tab_id),
+            Some(NativeNavigation::Back { tab_id }) => (3, tab_id),
+            Some(NativeNavigation::Forward { tab_id }) => (4, tab_id),
+            None => (0, 0),
+        };
         Self {
             accepted: effects.accepted.into(),
             state_changed: effects.state_changed.into(),
@@ -92,6 +155,11 @@ impl From<AppEffects> for PhotonAppEffects {
             force_dark_pages_changed: effects.force_dark_pages_changed.into(),
             created_tab_id: effects.created_tab_id,
             removed_tab_id: effects.removed_tab_id,
+            requested_close_tab_id: effects.requested_close_tab_id,
+            navigation_kind,
+            navigation_tab_id,
+            navigation_target: borrowed_utf8(Some(argument)),
+            focus_address: effects.focus_address.into(),
         }
     }
 }
@@ -167,9 +235,27 @@ pub unsafe extern "C" fn photon_app_dispatch(
             1 => true,
             _ => return PhotonAppEffects::default(),
         }),
+        PhotonAppCommandKind::Navigate => {
+            let Some(input) = (unsafe { input_utf8(command.argument.data, command.argument.len) }) else {
+                return PhotonAppEffects::default();
+            };
+            AppCommand::Navigate(input)
+        }
+        PhotonAppCommandKind::Reload => AppCommand::Reload,
+        PhotonAppCommandKind::Back => AppCommand::Back,
+        PhotonAppCommandKind::Forward => AppCommand::Forward,
+        PhotonAppCommandKind::CloseActiveTab => AppCommand::CloseActiveTab,
+        PhotonAppCommandKind::SelectPreviousTab => AppCommand::SelectAdjacentTab { previous: true },
+        PhotonAppCommandKind::SelectNextTab => AppCommand::SelectAdjacentTab { previous: false },
+        PhotonAppCommandKind::FocusAddress => AppCommand::FocusAddress,
     };
 
-    state.app.dispatch(command).into()
+    let effects = state.app.dispatch(command);
+    state.command_argument = match effects.navigation.as_ref() {
+        Some(NativeNavigation::Navigate { target, .. }) => target.clone(),
+        _ => String::new(),
+    };
+    PhotonAppEffects::from_effects(effects, &state.command_argument)
 }
 
 /// # Safety
@@ -227,12 +313,6 @@ pub unsafe extern "C" fn photon_browser_active_tab_id(state: *const PhotonBrowse
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn photon_browser_adjacent_tab_id(state: *const PhotonBrowserState, previous: u8) -> u64 {
-    // SAFETY: Native code keeps the state alive for the duration of this call.
-    unsafe { state.as_ref() }.map_or(0, |state| state.app.browser.adjacent_tab_id(previous != 0))
-}
-
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn photon_browser_is_internal_page(state: *const PhotonBrowserState) -> u8 {
     // SAFETY: Native code keeps the state alive for the duration of this call.
     unsafe { state.as_ref() }
@@ -269,28 +349,6 @@ pub unsafe extern "C" fn photon_browser_tabs_json(state: *mut PhotonBrowserState
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn photon_browser_set_url(
-    state: *mut PhotonBrowserState,
-    tab_id: u64,
-    data: *const u8,
-    len: usize,
-) -> u8 {
-    // SAFETY: This function forwards its documented native pointer contract unchanged.
-    unsafe { update_string(state, tab_id, data, len, BrowserState::set_url) }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn photon_browser_set_title(
-    state: *mut PhotonBrowserState,
-    tab_id: u64,
-    data: *const u8,
-    len: usize,
-) -> u8 {
-    // SAFETY: This function forwards its documented native pointer contract unchanged.
-    unsafe { update_string(state, tab_id, data, len, BrowserState::set_title) }
-}
-
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn photon_browser_set_favicon(
     state: *mut PhotonBrowserState,
     tab_id: u64,
@@ -303,127 +361,6 @@ pub unsafe extern "C" fn photon_browser_set_favicon(
     };
     let favicon_url = (!value.is_empty()).then_some(value);
     state.app.browser.set_favicon(tab_id, favicon_url).into()
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn photon_browser_set_loading(state: *mut PhotonBrowserState, tab_id: u64, loading: u8) -> u8 {
-    // SAFETY: Native code keeps the state alive for the duration of this call.
-    unsafe { state.as_mut() }
-        .is_some_and(|state| state.app.browser.set_loading(tab_id, loading != 0))
-        .into()
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn photon_browser_set_navigation_capabilities(
-    state: *mut PhotonBrowserState,
-    tab_id: u64,
-    can_go_back: u8,
-    can_go_forward: u8,
-) -> u8 {
-    // SAFETY: Native code keeps the state alive for the duration of this call.
-    unsafe { state.as_mut() }
-        .is_some_and(|state| {
-            state.app.browser.set_navigation_capabilities(
-                tab_id,
-                NavigationCapabilities {
-                    can_go_back: can_go_back != 0,
-                    can_go_forward: can_go_forward != 0,
-                },
-            )
-        })
-        .into()
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn photon_browser_begin_navigation(
-    state: *mut PhotonBrowserState,
-    tab_id: u64,
-    data: *const u8,
-    len: usize,
-) -> u8 {
-    // SAFETY: Native code supplies a live state and an input buffer valid for this call.
-    let (Some(state), Some(url)) = (unsafe { state.as_mut() }, unsafe { input_utf8(data, len) }) else {
-        return 0;
-    };
-    state.app.browser.begin_navigation(tab_id, url).into()
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn photon_browser_prepare_navigate(
-    state: *mut PhotonBrowserState,
-    data: *const u8,
-    len: usize,
-) -> PhotonBrowserCommand {
-    // SAFETY: Native code supplies a live state and an input buffer valid for this call.
-    let (Some(state), Some(input)) = (unsafe { state.as_mut() }, unsafe { input_utf8(data, len) }) else {
-        return no_command();
-    };
-    let Some(command) = state.app.browser.command_for_navigation(input) else {
-        return no_command();
-    };
-    prepare_command(state, command)
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn photon_browser_prepare_reload(state: *mut PhotonBrowserState) -> PhotonBrowserCommand {
-    // SAFETY: Native code keeps the state alive for the duration of this call.
-    let Some(state) = (unsafe { state.as_mut() }) else {
-        return no_command();
-    };
-    prepare_command(state, state.app.browser.reload_command())
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn photon_browser_prepare_back(state: *mut PhotonBrowserState) -> PhotonBrowserCommand {
-    // SAFETY: This function forwards its documented native pointer contract unchanged.
-    unsafe { prepare_optional_history_command(state, BrowserState::back_command) }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn photon_browser_prepare_forward(state: *mut PhotonBrowserState) -> PhotonBrowserCommand {
-    // SAFETY: This function forwards its documented native pointer contract unchanged.
-    unsafe { prepare_optional_history_command(state, BrowserState::forward_command) }
-}
-
-fn prepare_command(state: &mut PhotonBrowserState, command: BrowserCommand) -> PhotonBrowserCommand {
-    let kind = match command {
-        BrowserCommand::Navigate(url) => {
-            state.command_argument = url;
-            PhotonBrowserCommandKind::Navigate
-        }
-        BrowserCommand::Reload => PhotonBrowserCommandKind::Reload,
-        BrowserCommand::Back => PhotonBrowserCommandKind::Back,
-        BrowserCommand::Forward => PhotonBrowserCommandKind::Forward,
-    };
-    PhotonBrowserCommand {
-        kind,
-        argument: borrowed_utf8(Some(&state.command_argument)),
-    }
-}
-
-unsafe fn prepare_optional_history_command(
-    state: *mut PhotonBrowserState,
-    command: fn(&BrowserState) -> Option<BrowserCommand>,
-) -> PhotonBrowserCommand {
-    // SAFETY: The caller forwards the native pointer whose lifetime covers this call.
-    let Some(state) = (unsafe { state.as_mut() }) else {
-        return no_command();
-    };
-    command(&state.app.browser).map_or_else(no_command, |command| prepare_command(state, command))
-}
-
-unsafe fn update_string(
-    state: *mut PhotonBrowserState,
-    tab_id: u64,
-    data: *const u8,
-    len: usize,
-    update: fn(&mut BrowserState, u64, &str) -> bool,
-) -> u8 {
-    // SAFETY: The caller supplies a live state and an input buffer valid for this call.
-    let (Some(state), Some(value)) = (unsafe { state.as_mut() }, unsafe { input_utf8(data, len) }) else {
-        return 0;
-    };
-    update(&mut state.app.browser, tab_id, value).into()
 }
 
 unsafe fn input_ids<'a>(ids: *const u64, len: usize) -> Option<&'a [u64]> {
@@ -453,12 +390,5 @@ fn borrowed_utf8(value: Option<&str>) -> PhotonUtf8 {
     PhotonUtf8 {
         data: bytes.as_ptr(),
         len: bytes.len(),
-    }
-}
-
-fn no_command() -> PhotonBrowserCommand {
-    PhotonBrowserCommand {
-        kind: PhotonBrowserCommandKind::None,
-        argument: borrowed_utf8(None),
     }
 }

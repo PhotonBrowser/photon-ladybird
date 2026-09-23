@@ -99,3 +99,15 @@ For a new Photon feature:
 5. Is the behavior part of web-platform/engine semantics? Implement it in Ladybird's architecture and keep any Photon-specific engine change in the registered patch series.
 
 Do not put Photon product policy in Ladybird, and do not make C++ the default home for new Photon application logic.
+
+## Navigation and observation migration (September 2026)
+
+The typed native dispatcher now sends navigation, reload, and history requests through `photon_app_dispatch`. `PhotonApp` chooses the active tab, normalizes a submitted address, updates the pending Photon snapshot, and returns a typed navigation intent with a tab ID. Internal Photon routes update Rust state without a Ladybird load. `BrowserView` executes the intent against its tab-ID-to-view map. This keeps the engine-reported URL authoritative after redirects and history traversal.
+
+Native shortcuts still use Qt to recognize platform key combinations. They now use the same Rust command path for tab creation, adjacent selection, reload, history traversal, and focus-address intent. Tab close remains coordinated with Ladybird's asynchronous `request_close` callback; native waits for that callback before asking Rust to remove the tab. The Qt window and overlay-capture commands remain native operations.
+
+Ladybird emits URL, title, loading, and history capabilities independently. The adapter sends those events through one `photon_app_observe_page` operation with a tagged partial observation. Rust updates its snapshot and preserves the special handling of internal pages. The favicon remains a separate image/data-URL update because it is prepared by the native bitmap encoder.
+
+`BrowserView` still owns the Rust handle and the native view map. Its `apply_app_effects` switch is the effect executor for now: it creates and destroys views, performs tab-specific navigation, applies appearance, and publishes state signals. A separate executor class would add indirection without splitting a concrete native lifetime boundary today. The view map caches object associations, not tab order or active-tab policy.
+
+The C ABI remains small enough for handwritten structs and functions: one application dispatch, one partial page observation, snapshot queries, and a favicon update. Effect strings borrow Rust storage until the next state mutation, so the C++ executor copies a target URL before calling Ladybird, whose callbacks may synchronously reenter the adapter. A future move of favicon encoding or window command policy would warrant revisiting the shape of this boundary, but it does not call for an FFI framework now.

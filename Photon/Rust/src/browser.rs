@@ -13,9 +13,6 @@ const NEW_TAB_URL: &str = "photon://newtab";
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum BrowserCommand {
     Navigate(String),
-    Reload,
-    Back,
-    Forward,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -287,18 +284,6 @@ impl BrowserState {
             tab.loading = true;
         }
         true
-    }
-
-    pub(crate) fn reload_command(&self) -> BrowserCommand {
-        BrowserCommand::Reload
-    }
-
-    pub(crate) fn back_command(&self) -> Option<BrowserCommand> {
-        self.can_go_back().then_some(BrowserCommand::Back)
-    }
-
-    pub(crate) fn forward_command(&self) -> Option<BrowserCommand> {
-        self.can_go_forward().then_some(BrowserCommand::Forward)
     }
 
     pub(crate) fn create_tab(&mut self) -> u64 {

@@ -146,9 +146,9 @@ void Window::install_web_shortcuts()
     };
 
     for (auto modifier : { Qt::ControlModifier, Qt::MetaModifier }) {
-        add(modifier, Qt::Key_L, [this] { m_scene->focus_address_bar(); });
+        add(modifier, Qt::Key_L, [this] { if (m_browser->request_focus_address()) m_scene->focus_address_bar(); });
         add(modifier, Qt::Key_T, [this] { m_browser->create_tab(); });
-        auto* close_tab_shortcut = add(modifier, Qt::Key_W, [this] { m_browser->close_tab(m_browser->active_tab_id()); });
+        auto* close_tab_shortcut = add(modifier, Qt::Key_W, [this] { m_browser->close_active_tab(); });
         close_tab_shortcut->setAutoRepeat(false);
         add(modifier, Qt::Key_R, [this] { m_browser->reload(); });
     }

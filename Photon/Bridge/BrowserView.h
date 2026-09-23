@@ -14,7 +14,6 @@
 #include <cstdint>
 
 class QWidget;
-struct PhotonBrowserCommand;
 struct PhotonAppEffects;
 struct PhotonBrowserState;
 
@@ -61,6 +60,8 @@ public:
     Q_INVOKABLE uint64_t open_settings();
     Q_INVOKABLE void select_tab(uint64_t tab_id);
     void select_adjacent_tab(bool previous);
+    void close_active_tab();
+    bool request_focus_address();
     Q_INVOKABLE void close_tab(uint64_t tab_id);
     Q_INVOKABLE void reorder_tabs(QList<uint64_t> const& tab_ids);
     void set_theme_mode(ThemeMode mode);
@@ -80,7 +81,6 @@ signals:
     void active_tab_changed();
 
 private:
-    bool apply_command(PhotonBrowserCommand const&);
     Ladybird::WebContentView& create_view(uint64_t tab_id);
     void update_url(uint64_t tab_id, QString const&);
     void update_title(uint64_t tab_id, QString const&);
