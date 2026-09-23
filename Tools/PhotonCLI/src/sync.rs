@@ -47,16 +47,15 @@ pub fn run(repository: &Path, fetch_only: bool, no_fetch: bool) -> Result<i32> {
     let (target_ref, target_sha) = resolve_target(repository)?;
     ui::kv("Upstream", format!("{} ({target_ref})", ui::sha(&target_sha)));
 
-    // A failed patch application leaves the merged upstream checkout pristine
-    // while the contributor refreshes only Patches/. Let the same sync command
-    // finish that operation without requiring a temporary commit.
+    // A failed patch application leaves canonical Ladybird files pristine while
+    // the contributor refreshes only Patches/. Let sync finish without a commit.
     if is_ancestor(repository, &target_sha, "HEAD")? && patches::is_patch_refresh_worktree(repository, &target_sha)? {
         check_series_on_revision(repository, &target_sha)?;
         ui::ok("Refreshed series", "registered patches apply to the merged upstream");
-        return record_revision(repository, &recorded.revision, &target_sha, false);
+        return record_revision(repository, &recorded.revision, &target_sha);
     }
 
-    let patches_materialized = validate_sync_worktree(repository, &target_sha)?;
+    validate_sync_worktree(repository, &target_sha)?;
     let series_check = check_series_on_revision(repository, &target_sha);
 
     if let Err(error) = series_check {
@@ -71,9 +70,7 @@ pub fn run(repository: &Path, fetch_only: bool, no_fetch: bool) -> Result<i32> {
         ui::step(format!(
             "Merging {target_ref} so the conflicting patch can be refreshed..."
         ));
-        if patches_materialized {
-            patches::unmaterialize_for_sync(repository)?;
-        }
+        crate::engine::clean(repository)?;
         let merged = Command::new("git")
             .args(["merge", "--no-edit", &target_ref])
             .current_dir(repository)
@@ -90,13 +87,13 @@ pub fn run(repository: &Path, fetch_only: bool, no_fetch: bool) -> Result<i32> {
         ui::failure("The registered patch series does not apply to the merged upstream.");
         ui::hint("Refresh the affected files in Patches/ladybird and Patches/series.toml, then rerun `./photon sync`.");
         ui::hint("The second sync accepts an unstaged patch-only refresh; no temporary commit is needed.");
-        ui::hint("The recorded upstream base was not changed and no patches were materialized.");
+        ui::hint("The recorded upstream base was not changed and canonical source remains pristine.");
         return Ok(1);
     }
 
     if is_ancestor(repository, &target_sha, "HEAD")? {
         ui::success(format!("Already in sync with {target_ref}."));
-        return record_revision(repository, &recorded.revision, &target_sha, patches_materialized);
+        return record_revision(repository, &recorded.revision, &target_sha);
     }
 
     let incoming = upstream::git(repository, &["rev-list", "--count", &format!("HEAD..{target_sha}")])?;
@@ -109,9 +106,7 @@ pub fn run(repository: &Path, fetch_only: bool, no_fetch: bool) -> Result<i32> {
     }
 
     ui::step(format!("Merging {target_ref} (history is never rewritten)..."));
-    if patches_materialized {
-        patches::unmaterialize_for_sync(repository)?;
-    }
+    crate::engine::clean(repository)?;
     let merged = Command::new("git")
         .args(["merge", "--no-edit", &target_ref])
         .current_dir(repository)
@@ -129,10 +124,10 @@ pub fn run(repository: &Path, fetch_only: bool, no_fetch: bool) -> Result<i32> {
 
     check_series_on_revision(repository, &head).context("Photon patch series does not apply to the merged checkout")?;
 
-    record_revision(repository, &recorded.revision, &target_sha, false)
+    record_revision(repository, &recorded.revision, &target_sha)
 }
 
-fn record_revision(repository: &Path, recorded: &str, target_sha: &str, patches_materialized: bool) -> Result<i32> {
+fn record_revision(repository: &Path, recorded: &str, target_sha: &str) -> Result<i32> {
     patches::validate_recorded_base(repository, target_sha)?;
     if recorded == target_sha {
         ui::kv("Recorded base", format!("{} (already current)", ui::sha(target_sha)));
@@ -140,15 +135,15 @@ fn record_revision(repository: &Path, recorded: &str, target_sha: &str, patches_
         return Ok(0);
     }
 
-    if patches_materialized {
-        patches::unmaterialize_for_sync(repository)?;
-    } else if !patches::is_pristine_at_revision(repository, target_sha)?
+    if !patches::is_pristine_at_revision(repository, target_sha)?
         && !patches::is_patch_refresh_worktree(repository, target_sha)?
     {
         bail!(
             "Ladybird checkout is not pristine at upstream {target_sha}, or contains changes beyond a patch-only refresh"
         );
     }
+
+    crate::engine::clean(repository)?;
 
     let path = repository.join(UPSTREAM_TOML);
     let source = fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
@@ -160,12 +155,12 @@ fn record_revision(repository: &Path, recorded: &str, target_sha: &str, patches_
     Ok(0)
 }
 
-fn validate_sync_worktree(repository: &Path, target_sha: &str) -> Result<bool> {
+fn validate_sync_worktree(repository: &Path, target_sha: &str) -> Result<()> {
     match patches::validate_sync_worktree(repository) {
-        Ok(materialized) => Ok(materialized),
+        Ok(()) => Ok(()),
         Err(original_error) => {
             if patches::is_pristine_at_revision(repository, target_sha)? {
-                Ok(false)
+                Ok(())
             } else {
                 Err(original_error)
             }

@@ -17,19 +17,50 @@ use crate::process::{run_inherited, run_logged};
 use crate::ui;
 
 pub fn build(repository: &Path, preset: &str, verbose: bool, target: Option<&str>) -> Result<i32> {
-    crate::patches::ensure_materialized(repository)?;
+    let source = crate::engine::ensure_build_tree(repository)?;
     ensure_webui_production_build(repository)?;
-    build_native(repository, preset, verbose, target)
+    build_native(repository, &source, preset, verbose, target)
 }
 
-fn build_native(repository: &Path, preset: &str, verbose: bool, target: Option<&str>) -> Result<i32> {
-    let mut command = ladybird_command(repository);
+fn build_native(repository: &Path, source: &Path, preset: &str, verbose: bool, target: Option<&str>) -> Result<i32> {
+    ensure_configured_for_source(source, preset)?;
+    let mut command = ladybird_command(source);
     command.args(["build", "--preset", preset]);
     if let Some(target) = target {
         command.arg(target);
     }
 
     run_build_command(repository, command, preset, verbose, target)
+}
+
+/// Ladybird's build helper reuses an existing CMake generator without checking
+/// which source tree created it. Photon can build from either generated tree,
+/// so invalidate only the generator marker when the shared cache points at a
+/// different source. Remove only CMake's generated configuration; compiled
+/// objects and shared dependency caches remain available for regeneration.
+fn ensure_configured_for_source(source: &Path, preset: &str) -> Result<()> {
+    let build_directory = source.join("Build").join(preset_directory(preset));
+    let cache = build_directory.join("CMakeCache.txt");
+    let Ok(contents) = fs::read_to_string(&cache) else {
+        return Ok(());
+    };
+    let configured_source = contents.lines().find_map(|line| {
+        line.strip_prefix("CMAKE_HOME_DIRECTORY:INTERNAL=")
+    });
+    let expected_source = source.canonicalize()?;
+    if configured_source.is_some_and(|configured| Path::new(configured) == expected_source) {
+        return Ok(());
+    }
+    for marker in ["build.ninja", "ladybird.sln"] {
+        let marker = build_directory.join(marker);
+        if marker.exists() {
+            fs::remove_file(&marker)
+                .with_context(|| format!("failed to invalidate {}", marker.display()))?;
+        }
+    }
+    remove_path(&cache)?;
+    remove_path(&build_directory.join("CMakeFiles"))?;
+    Ok(())
 }
 
 pub fn run(
@@ -39,7 +70,7 @@ pub fn run(
     verbose: bool,
     application_args: &[OsString],
 ) -> Result<i32> {
-    crate::patches::ensure_materialized(repository)?;
+    let source = crate::engine::ensure_build_tree(repository)?;
     if !no_build {
         let code = build(repository, preset, verbose, Some("Photon"))?;
         if code != 0 {
@@ -54,22 +85,22 @@ pub fn run(
         ui::step("Starting Photon without building...");
     }
 
-    let mut command = ladybird_command(repository);
+    let mut command = ladybird_command(&source);
     command.args(["run", "--preset", preset, "--no-build", "Photon"]);
     command.args(application_args);
     run_inherited(&mut command)
 }
 
 pub fn run_dev(repository: &Path, no_build: bool, verbose: bool, application_args: &[OsString]) -> Result<i32> {
-    crate::patches::ensure_materialized(repository)?;
+    let source = crate::engine::ensure_build_tree(repository)?;
     ensure_webui_dependencies(repository)?;
-    let mut sources = dev_source_snapshot(repository)?;
-    if photon_binary_needs_build(repository, &sources)? {
+    let mut sources = dev_source_snapshot(repository, &source)?;
+    if photon_binary_needs_build(&source, &sources)? {
         if no_build {
             bail!("Photon must be built for dev mode; run `./photon build` first or omit `--no-build`");
         }
         ui::step("Building Photon for dev mode...");
-        let code = build_native(repository, "Release", verbose, Some("Photon"))?;
+        let code = build_native(repository, &source, "Release", verbose, Some("Photon"))?;
         if code != 0 {
             return Ok(code);
         }
@@ -117,7 +148,7 @@ pub fn run_dev(repository: &Path, no_build: bool, verbose: bool, application_arg
             bail!("Vite dev server exited unexpectedly (status {status})");
         }
 
-        let next_sources = match dev_source_snapshot(repository) {
+        let next_sources = match dev_source_snapshot(repository, &source) {
             Ok(sources) => sources,
             Err(error) => {
                 if let Some(photon) = &mut photon {
@@ -139,10 +170,10 @@ pub fn run_dev(repository: &Path, no_build: bool, verbose: bool, application_arg
         crate::process::stop_background(&mut vite)?;
         thread::sleep(Duration::from_millis(300));
 
-        crate::patches::ensure_materialized(repository)?;
-        sources = dev_source_snapshot(repository)?;
+        let source = crate::engine::ensure_build_tree(repository)?;
+        sources = dev_source_snapshot(repository, &source)?;
         ensure_webui_dependencies(repository)?;
-        let code = build_native(repository, "Release", verbose, Some("Photon"))?;
+        let code = build_native(repository, &source, "Release", verbose, Some("Photon"))?;
         if code == 130 || crate::process::interrupt_requested() {
             return Ok(130);
         }
@@ -338,9 +369,12 @@ fn vite_serves_photon(address: SocketAddr) -> bool {
     response.contains("200 OK") && response.contains("Photon Chrome") && response.contains("/@vite/client")
 }
 
-fn photon_binary_needs_build(repository: &Path, sources: &HashMap<PathBuf, SourceFileState>) -> Result<bool> {
+fn photon_binary_needs_build(
+    source: &Path,
+    sources: &HashMap<PathBuf, SourceFileState>,
+) -> Result<bool> {
     let executable = if cfg!(windows) { "Photon.exe" } else { "Photon" };
-    let binary = repository.join("Build/release/bin").join(executable);
+    let binary = source.join("Build/release/bin").join(executable);
     let Ok(binary_metadata) = fs::metadata(&binary) else {
         return Ok(true);
     };
@@ -356,17 +390,15 @@ struct SourceFileState {
     size: u64,
 }
 
-fn dev_source_snapshot(repository: &Path) -> Result<HashMap<PathBuf, SourceFileState>> {
+fn dev_source_snapshot(repository: &Path, source: &Path) -> Result<HashMap<PathBuf, SourceFileState>> {
     let mut sources = HashMap::new();
-    collect_dev_sources(repository, repository, &mut sources)?;
+    collect_dev_sources(source, &mut sources)?;
+    collect_dev_sources(&repository.join("Photon"), &mut sources)?;
+    collect_dev_sources(&repository.join("Patches"), &mut sources)?;
     Ok(sources)
 }
 
-fn collect_dev_sources(
-    repository: &Path,
-    directory: &Path,
-    sources: &mut HashMap<PathBuf, SourceFileState>,
-) -> Result<()> {
+fn collect_dev_sources(directory: &Path, sources: &mut HashMap<PathBuf, SourceFileState>) -> Result<()> {
     for entry in fs::read_dir(directory).with_context(|| format!("failed to read {}", directory.display()))? {
         let entry = entry?;
         let path = entry.path();
@@ -378,7 +410,7 @@ fn collect_dev_sources(
             if should_skip_dev_directory(&entry.file_name()) {
                 continue;
             }
-            collect_dev_sources(repository, &path, sources)?;
+            collect_dev_sources(&path, sources)?;
             continue;
         }
         if !is_dev_build_input(&path) {
@@ -386,7 +418,7 @@ fn collect_dev_sources(
         }
         let metadata = entry.metadata()?;
         sources.insert(
-            path.strip_prefix(repository)?.to_owned(),
+            path,
             SourceFileState {
                 modified: metadata.modified()?,
                 size: metadata.len(),
@@ -458,7 +490,8 @@ fn is_dev_build_input(path: &Path) -> bool {
 }
 
 pub fn clean(repository: &Path, preset: &str) -> Result<i32> {
-    let build_directory = repository.join("Build").join(preset_directory(preset));
+    let source = crate::engine::ensure_build_tree(repository)?;
+    let build_directory = source.join("Build").join(preset_directory(preset));
     remove_path(&build_directory.join("Photon"))?;
     remove_path(&build_directory.join("bin/Photon"))?;
     ui::header("Photon", Some("Clean"));
@@ -468,7 +501,8 @@ pub fn clean(repository: &Path, preset: &str) -> Result<i32> {
 }
 
 pub fn test(repository: &Path, preset: &str, pattern: Option<&str>, verbose: bool) -> Result<i32> {
-    let mut command = ladybird_command(repository);
+    let source = crate::engine::ensure_build_tree(repository)?;
+    let mut command = ladybird_command(&source);
     command.args(["test", "--preset", preset]);
     if let Some(pattern) = pattern {
         command.arg(pattern);

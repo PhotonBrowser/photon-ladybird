@@ -11,6 +11,7 @@
 *.autosave
 build*/
 Build*/
+.photon/
 target/
 # ...but Flap's backend sources live in a directory of that name.
 !Libraries/LibJS/Flap/src/target/

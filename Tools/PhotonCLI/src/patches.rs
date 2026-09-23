@@ -9,12 +9,6 @@ use console::style;
 use crate::metadata::{self, Patch};
 use crate::ui;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum CheckoutState {
-    Pristine,
-    Materialized,
-}
-
 pub fn status(repository: &Path) -> Result<i32> {
     let patches = series(repository)?;
     let upstream = metadata::read_upstream(&repository.join("Meta/Photon/upstream.toml"))?;
@@ -26,23 +20,17 @@ pub fn status(repository: &Path) -> Result<i32> {
 
     ui::header("Photon", Some(&format!("Patches · {}", patches.len())));
     let owned_paths = patch_paths(repository, &patches)?;
-    let state = checkout_state(repository, &patches).ok();
-    if state.is_none() {
-        ui::failure("Ladybird checkout is neither pristine nor the exact registered patch series");
-    }
+    verify_pristine_files(repository, &patches, &upstream.revision)
+        .context("canonical Ladybird source must remain pristine; use `./photon engine edit`")?;
+    let materialized = crate::engine::status_tree(repository)?;
     for patch in &patches {
-        let applied = match state {
-            Some(CheckoutState::Materialized) => true,
-            Some(CheckoutState::Pristine) => false,
-            None => patch_is_applied(repository, patch)?,
-        };
-        if applied {
+        if let Some(tree) = materialized {
             println!(
                 "  {} {:<8} {} {}",
                 style("✓").green().bold(),
                 patch.id,
                 patch.description,
-                style(format!("({})", patch.area)).dim()
+                style(format!("({} · {tree})", patch.area)).dim()
             );
         } else {
             println!(
@@ -50,7 +38,7 @@ pub fn status(repository: &Path) -> Result<i32> {
                 style("○").yellow().bold(),
                 patch.id,
                 patch.description,
-                style(format!("({}) · not applied or diverged", patch.area)).dim()
+                style(format!("({} · registered)", patch.area)).dim()
             );
         }
     }
@@ -68,10 +56,47 @@ pub fn status(repository: &Path) -> Result<i32> {
         }
         return Ok(1);
     }
-    if state.is_none() {
+    let edit_paths = unrepresented_edit_paths(repository)?;
+    if edit_paths.is_empty() {
+        ui::ok("Engine edit tree", "no uncaptured changes");
+    } else {
+        ui::failure("Uncaptured engine edits in .photon/worktree");
+        for path in edit_paths {
+            println!("  {}", path.display());
+        }
         return Ok(1);
     }
     Ok(0)
+}
+
+fn unrepresented_edit_paths(repository: &Path) -> Result<Vec<PathBuf>> {
+    let edit_tree = crate::engine::edit_tree(repository);
+    if !edit_tree.exists() {
+        return Ok(Vec::new());
+    }
+    crate::engine::verify_edit_tree(repository)?;
+    let patches = series(repository)?;
+    let upstream = metadata::read_upstream(&repository.join("Meta/Photon/upstream.toml"))?;
+    let temporary = std::env::temp_dir().join(format!("photon-edit-status-{}", std::process::id()));
+    if temporary.exists() {
+        fs::remove_dir_all(&temporary)?;
+    }
+    fs::create_dir(&temporary)?;
+    let baseline = temporary.join("baseline");
+    fs::create_dir(&baseline)?;
+    check_in(repository, &baseline, &upstream.revision, &patches)?;
+
+    let mut changed = Vec::new();
+    for path in changed_paths(&edit_tree)? {
+        if !is_ladybird_path(&path) {
+            continue;
+        }
+        if fs::read(baseline.join(&path)).ok() != fs::read(edit_tree.join(&path)).ok() {
+            changed.push(path);
+        }
+    }
+    fs::remove_dir_all(&temporary)?;
+    Ok(changed)
 }
 
 pub fn check(repository: &Path) -> Result<i32> {
@@ -87,8 +112,9 @@ pub fn check(repository: &Path) -> Result<i32> {
     fs::remove_dir_all(&temporary).context("failed to remove temporary patch checkout")?;
     result?;
     let owned_paths = patch_paths(repository, &patches)?;
-    checkout_state(repository, &patches)
-        .context("Ladybird checkout is neither pristine nor the exact registered patch series")?;
+    verify_pristine_files(repository, &patches, &upstream.revision)
+        .context("canonical Ladybird source must remain pristine; use `./photon engine edit`")?;
+    crate::engine::materialized(repository)?;
     let direct = changed_paths(repository)?
         .into_iter()
         .filter(|path| is_ladybird_path(path) && !owned_paths.contains(path))
@@ -105,6 +131,17 @@ pub fn check(repository: &Path) -> Result<i32> {
                 .join("\n")
         );
     }
+    let edit_paths = unrepresented_edit_paths(repository)?;
+    if !edit_paths.is_empty() {
+        bail!(
+            "uncaptured engine edits remain in .photon/worktree:\n{}",
+            edit_paths
+                .iter()
+                .map(|path| format!("  {}", path.display()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
 
     let suffix = if patches.len() == 1 { "patch" } else { "patches" };
     ui::header("Photon", Some("Patches check"));
@@ -116,31 +153,32 @@ pub fn check(repository: &Path) -> Result<i32> {
     Ok(0)
 }
 
-/// Return the Ladybird checkout to its recorded upstream state after validating
-/// that every changed patch-owned file exactly matches the registered series.
-pub fn unapply(repository: &Path) -> Result<i32> {
-    let patches = series(repository)?;
-    match checkout_state(repository, &patches)
-        .context("Ladybird checkout is neither pristine nor the exact registered patch series")?
-    {
-        CheckoutState::Pristine => {
-            ui::header("Photon", Some("Patches unapply"));
-            ui::note("Ladybird", "already pristine at the recorded upstream base");
-            return Ok(0);
-        }
-        CheckoutState::Materialized => {}
+/// Capture the delta in the engine edit worktree as the next registered patch.
+pub fn capture(repository: &Path, name: &str, area: &str) -> Result<i32> {
+    let name = name.trim();
+    let area = area.trim();
+    if name.is_empty() || area.is_empty() {
+        bail!("patch name and area must not be empty");
+    }
+    if name.chars().any(char::is_control) || area.chars().any(char::is_control) {
+        bail!("patch name and area must not contain control characters");
     }
 
-    let owned_paths = patch_paths(repository, &patches)?;
-    let staged = staged_paths(repository)?;
-    let unexpected = staged
-        .iter()
-        .filter(|path| !owned_paths.contains(*path))
-        .collect::<Vec<_>>();
-    if !unexpected.is_empty() {
+    let edit_tree = crate::engine::edit_tree(repository);
+    if !edit_tree.exists() {
+        bail!("no engine edit tree exists; run `./photon engine edit` first");
+    }
+    let patches = series(repository)?;
+    if patches.is_empty() {
+        bail!("cannot capture a patch without an existing registered series");
+    }
+    crate::engine::verify_edit_tree(repository)?;
+
+    let staged_engine_paths = staged_paths(&edit_tree)?;
+    if !staged_engine_paths.is_empty() {
         bail!(
-            "staged changes outside the registered patch materialization prevent unapplying patches:\n{}",
-            unexpected
+            "staged changes in the engine edit tree prevent capture; unstage them first:\n{}",
+            staged_engine_paths
                 .iter()
                 .map(|path| format!("  {}", path.display()))
                 .collect::<Vec<_>>()
@@ -148,62 +186,148 @@ pub fn unapply(repository: &Path) -> Result<i32> {
         );
     }
 
-    for path in &staged {
-        let status = Command::new("git")
-            .args(["diff", "--quiet", "--"])
-            .arg(path)
-            .current_dir(repository)
-            .status()?;
-        match status.code() {
-            Some(0) => {}
-            Some(1) => bail!(
-                "{} has staged content beyond the current patch materialization; unstage or commit it separately",
-                path.display()
-            ),
-            _ => bail!("failed to compare staged and working-tree content for {}", path.display()),
-        }
-    }
-
-    if !staged.is_empty() {
-        for path in &staged {
-            let object = format!("HEAD:{}", path.display());
-            let tracked = Command::new("git")
-                .args(["cat-file", "-e", &object])
-                .current_dir(repository)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()?
-                .success();
-            let mut unstage = Command::new("git");
-            if tracked {
-                unstage.args(["restore", "--staged", "--"]);
-            } else {
-                unstage.args(["rm", "--cached", "--force", "--"]);
-            }
-            unstage.arg(path).current_dir(repository);
-            successful(&mut unstage, &format!("unstage materialized file {}", path.display()))?;
-        }
-    }
-
-    ui::header("Photon", Some("Patches unapply"));
-    for patch in patches.iter().rev() {
-        successful(
-            Command::new("git")
-                .args(["apply", "--reverse"])
-                .arg(patch_path(repository, patch)?)
-                .current_dir(repository),
-            &format!("unapply patch {}", patch.id),
-        )?;
-    }
-
     let upstream = metadata::read_upstream(&repository.join("Meta/Photon/upstream.toml"))?;
-    verify_pristine_files(repository, &patches, &upstream.revision)?;
-    ui::ok("Ladybird", "patches unapplied; checkout is pristine at the recorded base");
-    ui::hint("The next `./photon build` or `./photon run` will materialize the registered series again.");
+    validate_recorded_base(repository, &upstream.revision)?;
+    let temporary = std::env::temp_dir().join(format!("photon-capture-{}", std::process::id()));
+    if temporary.exists() {
+        fs::remove_dir_all(&temporary)?;
+    }
+    fs::create_dir(&temporary)?;
+    let baseline = temporary.join("baseline");
+    fs::create_dir(&baseline)?;
+    check_in(repository, &baseline, &upstream.revision, &patches)?;
+
+    let mut patch_contents = String::new();
+    for path in changed_paths(&edit_tree)? {
+        if !is_ladybird_path(&path) {
+            continue;
+        }
+        let baseline_file = baseline.join(&path);
+        let checkout_file = edit_tree.join(&path);
+        let baseline_exists = baseline_file.is_file();
+        let checkout_exists = checkout_file.is_file();
+        if !baseline_exists && !checkout_exists {
+            continue;
+        }
+
+        let baseline_arg = if baseline_exists {
+            baseline_file.clone()
+        } else {
+            PathBuf::from("/dev/null")
+        };
+        let checkout_arg = if checkout_exists {
+            checkout_file
+        } else {
+            PathBuf::from("/dev/null")
+        };
+        let output = Command::new("diff")
+            .arg("-u")
+            .arg("--label")
+            .arg(if baseline_exists {
+                format!("a/{}", path.display())
+            } else {
+                "/dev/null".to_owned()
+            })
+            .arg("--label")
+            .arg(if checkout_exists {
+                format!("b/{}", path.display())
+            } else {
+                "/dev/null".to_owned()
+            })
+            .arg(baseline_arg)
+            .arg(checkout_arg)
+            .output()
+            .context("failed to create a source diff; install the diff utility")?;
+        if !output.status.success() && output.status.code() != Some(1) {
+            bail!("failed to compare Ladybird source file {}", path.display());
+        }
+        patch_contents.push_str(&String::from_utf8_lossy(&output.stdout));
+    }
+    if patch_contents.is_empty() {
+        fs::remove_dir_all(&temporary)?;
+        ui::header("Photon", Some("Patches already registered"));
+        ui::note("Capture", "no unrepresented Ladybird edits; no duplicate patch created");
+        return Ok(0);
+    }
+
+    let next_id = patches
+        .iter()
+        .filter_map(|patch| patch.id.parse::<u32>().ok())
+        .max()
+        .unwrap_or(0)
+        + 1;
+    let id = format!("{next_id:04}");
+    let slug = patch_slug(name);
+    if slug.is_empty() {
+        fs::remove_dir_all(&temporary)?;
+        bail!("patch name must contain at least one letter or number");
+    }
+    let file = format!("ladybird/{id}-{slug}.patch");
+    let patch_file = repository.join("Patches").join(&file);
+    if patch_file.exists() {
+        fs::remove_dir_all(&temporary)?;
+        bail!("patch file already exists: {}", patch_file.display());
+    }
+    let candidate = temporary.join("candidate.patch");
+    fs::write(&candidate, &patch_contents)?;
+    successful(
+        Command::new("git")
+            .args(["apply", "--check"])
+            .arg(&candidate)
+            .current_dir(&baseline),
+        "validate captured source changes against the registered patch series",
+    )?;
+    successful(
+        Command::new("git").arg("apply").arg(&candidate).current_dir(&baseline),
+        "apply captured changes to the temporary series checkout",
+    )?;
+    crate::engine::discard_build_tree(repository)?;
+
+    fs::write(&patch_file, patch_contents)?;
+    let series_file = repository.join("Patches/series.toml");
+    let mut manifest = fs::read_to_string(&series_file)?;
+    manifest.push_str(&format!(
+        "\n[[patches]]\nid = \"{id}\"\nfile = \"{file}\"\ndescription = \"{}\"\narea = \"{}\"\n",
+        toml_string(name),
+        toml_string(area)
+    ));
+    fs::write(&series_file, manifest)?;
+
+    let updated_patches = series(repository)?;
+    crate::engine::verify_edit_tree_with_series(repository, &edit_tree, &updated_patches)?;
+    fs::remove_dir_all(&temporary).context("failed to remove temporary patch capture files")?;
+
+    ui::header("Photon", Some("Patch captured"));
+    ui::ok(&id, format!("{} · {}", name, file));
+    ui::ok(
+        "Engine edit tree",
+        "captured change remains available and is represented by the new patch",
+    );
     Ok(0)
 }
 
-fn verify_materialized_files(repository: &Path, patches: &[Patch]) -> Result<()> {
+fn patch_slug(name: &str) -> String {
+    let mut slug = String::new();
+    let mut separator = false;
+    for character in name.chars() {
+        if character.is_ascii_alphanumeric() {
+            if separator && !slug.is_empty() {
+                slug.push('-');
+            }
+            slug.push(character.to_ascii_lowercase());
+            separator = false;
+        } else {
+            separator = true;
+        }
+    }
+    slug
+}
+
+fn toml_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+pub(crate) fn verify_materialized_files(repository: &Path, patches: &[Patch]) -> Result<()> {
     let upstream = metadata::read_upstream(&repository.join("Meta/Photon/upstream.toml"))?;
     let temporary = std::env::temp_dir().join(format!("photon-materialized-{}", std::process::id()));
     if temporary.exists() {
@@ -257,75 +381,9 @@ fn verify_pristine_files(repository: &Path, patches: &[Patch], revision: &str) -
     Ok(())
 }
 
-fn checkout_state(repository: &Path, patches: &[Patch]) -> Result<CheckoutState> {
-    if verify_materialized_files(repository, patches).is_ok() {
-        return Ok(CheckoutState::Materialized);
-    }
-    let upstream = metadata::read_upstream(&repository.join("Meta/Photon/upstream.toml"))?;
-    verify_pristine_files(repository, patches, &upstream.revision)?;
-    Ok(CheckoutState::Pristine)
-}
-
-/// Ensure the checked-out Ladybird files contain exactly the registered patch series.
-/// A pristine base is patched in order; partial or divergent states are never overwritten.
+/// Ensure a generated build tree exists with exactly the registered patch series.
 pub fn ensure_materialized(repository: &Path) -> Result<()> {
-    let patches = series(repository)?;
-    let upstream = metadata::read_upstream(&repository.join("Meta/Photon/upstream.toml"))?;
-    validate_recorded_base(repository, &upstream.revision)
-        .context("run `./photon sync` to advance the base before building")?;
-    match checkout_state(repository, &patches)? {
-        CheckoutState::Materialized => {
-            let owned_paths = patch_paths(repository, &patches)?;
-            let direct = changed_paths(repository)?
-                .into_iter()
-                .filter(|path| is_ladybird_path(path) && !owned_paths.contains(path))
-                .collect::<Vec<_>>();
-            if !direct.is_empty() {
-                bail!(
-                    "unrepresented direct modifications to upstream Ladybird files: {}",
-                    direct
-                        .iter()
-                        .map(|path| path.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-            }
-            return Ok(());
-        }
-        CheckoutState::Pristine => {}
-    }
-    let unexpected = changed_paths(repository)?
-        .into_iter()
-        .filter(|path| is_ladybird_path(path))
-        .collect::<Vec<_>>();
-    if !unexpected.is_empty() {
-        bail!(
-            "Ladybird files have unrepresented working-tree changes; resolve them before materializing patches:\n{}",
-            unexpected
-                .iter()
-                .map(|path| format!("  {}", path.display()))
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
-    }
-    for patch in &patches {
-        let path = patch_path(repository, patch)?;
-        successful(
-            Command::new("git")
-                .args(["apply", "--check"])
-                .arg(&path)
-                .current_dir(repository),
-            &format!("check patch {} against checkout", patch.id),
-        )?;
-        successful(
-            Command::new("git")
-                .arg("apply")
-                .arg(patch_path(repository, patch)?)
-                .current_dir(repository),
-            &format!("materialize patch {}", patch.id),
-        )?;
-    }
-    verify_materialized_files(repository, &patches)
+    crate::engine::ensure_build_tree(repository).map(|_| ())
 }
 
 pub(crate) fn validate_recorded_base(repository: &Path, revision: &str) -> Result<()> {
@@ -346,7 +404,7 @@ pub(crate) fn validate_recorded_base(repository: &Path, revision: &str) -> Resul
 /// Allow sync to proceed when the only working-tree changes are the exact
 /// registered Ladybird patch materialization. Photon source changes and staged
 /// changes still require the contributor to commit or stash them first.
-pub(crate) fn validate_sync_worktree(repository: &Path) -> Result<bool> {
+pub(crate) fn validate_sync_worktree(repository: &Path) -> Result<()> {
     let staged = Command::new("git")
         .args(["diff", "--cached", "--quiet"])
         .current_dir(repository)
@@ -356,29 +414,13 @@ pub(crate) fn validate_sync_worktree(repository: &Path) -> Result<bool> {
     }
 
     let patches = series(repository)?;
-    if checkout_state(repository, &patches)? == CheckoutState::Pristine {
-        if changed_paths(repository)?.is_empty() {
-            return Ok(false);
-        }
+    let upstream = metadata::read_upstream(&repository.join("Meta/Photon/upstream.toml"))?;
+    verify_pristine_files(repository, &patches, &upstream.revision)
+        .context("canonical Ladybird source must remain pristine; use `./photon engine edit`")?;
+    if !changed_paths(repository)?.is_empty() {
         bail!("working tree is not clean; commit or stash your work before syncing");
     }
-
-    let owned_paths = patch_paths(repository, &patches)?;
-    let unexpected = changed_paths(repository)?
-        .into_iter()
-        .filter(|path| !is_ladybird_path(path) || !owned_paths.contains(path))
-        .collect::<Vec<_>>();
-    if !unexpected.is_empty() {
-        bail!(
-            "working tree has changes outside the registered patch materialization:\n{}",
-            unexpected
-                .iter()
-                .map(|path| format!("  {}", path.display()))
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
-    }
-    Ok(true)
+    Ok(())
 }
 
 /// Recognize the clean, unpatched upstream checkout left behind when a sync
@@ -452,35 +494,7 @@ fn is_pristine_ladybird_at_revision(repository: &Path, revision: &str) -> Result
     Ok(committed.is_empty())
 }
 
-/// Remove an already verified patch materialization so Git can merge pristine
-/// upstream files. Patches are reversed in the opposite order from the series.
-pub(crate) fn unmaterialize_for_sync(repository: &Path) -> Result<()> {
-    if !validate_sync_worktree(repository)? {
-        return Ok(());
-    }
-    for patch in series(repository)?.iter().rev() {
-        successful(
-            Command::new("git")
-                .args(["apply", "--reverse"])
-                .arg(patch_path(repository, patch)?)
-                .current_dir(repository),
-            &format!("remove patch {} before upstream merge", patch.id),
-        )?;
-    }
-    Ok(())
-}
-
-fn patch_is_applied(repository: &Path, patch: &Patch) -> Result<bool> {
-    let path = patch_path(repository, patch)?;
-    Ok(Command::new("git")
-        .args(["apply", "--reverse", "--check"])
-        .arg(path)
-        .current_dir(repository)
-        .status()?
-        .success())
-}
-
-fn patch_paths(repository: &Path, patches: &[Patch]) -> Result<std::collections::HashSet<PathBuf>> {
+pub(crate) fn patch_paths(repository: &Path, patches: &[Patch]) -> Result<std::collections::HashSet<PathBuf>> {
     let mut paths = std::collections::HashSet::new();
     for patch in patches {
         let output = Command::new("git")

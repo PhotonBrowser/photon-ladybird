@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 mod build;
 mod doctor;
+mod engine;
 mod metadata;
 mod output;
 mod patches;
@@ -50,7 +51,7 @@ enum Command {
     Test(TestArgs),
     /// Check the local Photon development environment
     Doctor,
-    /// Sync upstream, record its base, and materialize the Photon patch series
+    /// Sync upstream, record its base, and refresh generated engine trees
     Sync(SyncArgs),
     /// Inspect or update the Photon origin remote
     Remote {
@@ -62,10 +63,15 @@ enum Command {
         #[command(subcommand)]
         command: UpstreamCommand,
     },
-    /// Inspect the Photon patch series
+    /// Inspect and capture the Photon patch series
     Patches {
         #[command(subcommand)]
         command: PatchCommand,
+    },
+    /// Manage generated Ladybird source trees
+    Engine {
+        #[command(subcommand)]
+        command: EngineCommand,
     },
 }
 
@@ -98,12 +104,31 @@ enum UpstreamCommand {
 
 #[derive(Debug, Subcommand)]
 enum PatchCommand {
-    /// Show whether each recorded patch is present
+    /// Show the registered patches and generated engine tree state
     Status,
     /// Check that the complete series applies to the recorded base
     Check,
-    /// Reverse the exact registered patch materialization from the Ladybird checkout
-    Unapply,
+    /// Capture edits from .photon/worktree into a numbered, registered patch
+    Capture(ApplyPatchArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum EngineCommand {
+    /// Create or refresh Build/Source with upstream plus the registered series
+    Materialize,
+    /// Create .photon/worktree for Ladybird source development
+    Edit,
+    /// Remove generated source trees while preserving build artifacts
+    Clean,
+}
+
+#[derive(Debug, Args)]
+struct ApplyPatchArgs {
+    /// Short description used for the patch filename and series entry
+    name: String,
+    /// Area label recorded in the patch series
+    #[arg(long, default_value = "General")]
+    area: String,
 }
 
 #[derive(Debug, Args)]
@@ -202,8 +227,17 @@ fn run() -> Result<i32> {
             command: PatchCommand::Check,
         } => patches::check(&repository),
         Command::Patches {
-            command: PatchCommand::Unapply,
-        } => patches::unapply(&repository),
+            command: PatchCommand::Capture(args),
+        } => patches::capture(&repository, &args.name, &args.area),
+        Command::Engine {
+            command: EngineCommand::Materialize,
+        } => engine::materialize(&repository),
+        Command::Engine {
+            command: EngineCommand::Edit,
+        } => engine::edit(&repository),
+        Command::Engine {
+            command: EngineCommand::Clean,
+        } => engine::clean(&repository),
     }
 }
 
