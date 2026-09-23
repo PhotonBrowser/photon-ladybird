@@ -1,0 +1,9 @@
+diff --git a/Services/WebContent/PageClient.cpp b/Services/WebContent/PageClient.cpp
+--- a/Services/WebContent/PageClient.cpp
++++ b/Services/WebContent/PageClient.cpp
+@@ -402,4 +402,5 @@ void PageClient::set_preferred_color_scheme(Web::CSS::PreferredColorScheme color_scheme)
+ {
+     m_preferred_color_scheme = color_scheme;
+     page().invalidate_style_for_preference_change();
++    request_frame();
+ }

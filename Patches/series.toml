@@ -35,3 +35,21 @@ id = "0006"
 file = "ladybird/0006-webgl-cpu-surface-without-dmabuf.patch"
 description = "Keep WebGL available when Vulkan canvas sharing is unavailable"
 area = "Rendering"
+
+[[patches]]
+id = "0007"
+file = "ladybird/0007-refresh-page-after-color-scheme-change.patch"
+description = "Refresh existing pages after their preferred color scheme changes"
+area = "Rendering integration"
+
+[[patches]]
+id = "0008"
+file = "ladybird/0008-idempotent-traversable-close.patch"
+description = "Make traversable close cleanup idempotent"
+area = "Navigation"
+
+[[patches]]
+id = "0009"
+file = "ladybird/0009-pointer-capture.patch"
+description = "Implement DOM pointer capture for mouse input"
+area = "Input handling"

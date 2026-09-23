@@ -1,0 +1,240 @@
+diff --git a/Libraries/LibWeb/DOM/Document.cpp b/Libraries/LibWeb/DOM/Document.cpp
+index edddb06436..b4568323e7 100644
+--- a/Libraries/LibWeb/DOM/Document.cpp
++++ b/Libraries/LibWeb/DOM/Document.cpp
+@@ -811,6 +811,8 @@ void Document::visit_edges(Cell::Visitor& visitor)
+         visitor.visit(grid_highlight.node);
+     visitor.visit(m_active_favicon);
+     visitor.visit(m_browsing_context);
++    visitor.visit(m_pending_pointer_capture_targets);
++    visitor.visit(m_pointer_capture_targets);
+     visitor.visit(m_focused_area);
+     visitor.visit(m_active_element);
+     visitor.visit(m_target_element);
+@@ -5800,6 +5804,43 @@ void Document::set_browsing_context(GC::Ptr<HTML::BrowsingContext> browsing_cont
+         ensure_style_engine_tracks_tree();
+ }
+ 
++void Document::set_pointer_active(WebIDL::Long pointer_id, bool active)
++{
++    if (active)
++        m_active_pointer_ids.set(pointer_id);
++    else {
++        m_active_pointer_ids.remove(pointer_id);
++        m_pending_pointer_capture_targets.remove(pointer_id);
++        m_pointer_capture_targets.remove(pointer_id);
++    }
++}
++
++GC::Ptr<Element> Document::pending_pointer_capture_target(WebIDL::Long pointer_id) const
++{
++    return m_pending_pointer_capture_targets.get(pointer_id).value_or(nullptr);
++}
++
++void Document::set_pending_pointer_capture_target(WebIDL::Long pointer_id, GC::Ptr<Element> target)
++{
++    if (target)
++        m_pending_pointer_capture_targets.set(pointer_id, target);
++    else
++        m_pending_pointer_capture_targets.remove(pointer_id);
++}
++
++GC::Ptr<Element> Document::pointer_capture_target(WebIDL::Long pointer_id) const
++{
++    return m_pointer_capture_targets.get(pointer_id).value_or(nullptr);
++}
++
++void Document::set_pointer_capture_target(WebIDL::Long pointer_id, GC::Ptr<Element> target)
++{
++    if (target)
++        m_pointer_capture_targets.set(pointer_id, target);
++    else
++        m_pointer_capture_targets.remove(pointer_id);
++}
++
+ void Document::ensure_style_engine_tracks_tree()
+ {
+     // A document without a browsing context never updates style, so its tree is not tracked until the style of an
+diff --git a/Libraries/LibWeb/DOM/Document.h b/Libraries/LibWeb/DOM/Document.h
+index bcb7f28114..b166eacc57 100644
+--- a/Libraries/LibWeb/DOM/Document.h
++++ b/Libraries/LibWeb/DOM/Document.h
+@@ -437,6 +437,13 @@ public:
+ 
+     void set_browsing_context(GC::Ptr<HTML::BrowsingContext>);
+ 
++    bool is_pointer_active(WebIDL::Long pointer_id) const { return m_active_pointer_ids.contains(pointer_id); }
++    void set_pointer_active(WebIDL::Long pointer_id, bool active);
++    GC::Ptr<Element> pending_pointer_capture_target(WebIDL::Long pointer_id) const;
++    void set_pending_pointer_capture_target(WebIDL::Long pointer_id, GC::Ptr<Element>);
++    GC::Ptr<Element> pointer_capture_target(WebIDL::Long pointer_id) const;
++    void set_pointer_capture_target(WebIDL::Long pointer_id, GC::Ptr<Element>);
++
+     bool style_engine_tracks_tree() const { return m_style_engine_tracks_tree; }
+     void ensure_style_engine_tracks_tree();
+ 
+@@ -1574,6 +1581,9 @@ private:
+     GC::Ptr<CSS::StyleSheetList> m_style_sheets;
+     GC::Ptr<Node> m_active_favicon;
+     GC::Ptr<HTML::BrowsingContext> m_browsing_context;
++    HashTable<WebIDL::Long> m_active_pointer_ids;
++    HashMap<WebIDL::Long, GC::Ptr<Element>> m_pending_pointer_capture_targets;
++    HashMap<WebIDL::Long, GC::Ptr<Element>> m_pointer_capture_targets;
+     URL::URL m_url;
+     mutable Optional<String> m_serialized_url;
+     mutable Optional<String> m_serialized_base_url;
+diff --git a/Libraries/LibWeb/DOM/Element.cpp b/Libraries/LibWeb/DOM/Element.cpp
+index 40f1f600cb..b631ca38c6 100644
+--- a/Libraries/LibWeb/DOM/Element.cpp
++++ b/Libraries/LibWeb/DOM/Element.cpp
+@@ -6650,23 +6650,40 @@ Optional<Gfx::DecodedImageFrame> Element::capture_the_image()
+     return Gfx::DecodedImageFrame { *bitmap };
+ }
+ 
+-void Element::set_pointer_capture(WebIDL::Long pointer_id)
++WebIDL::ExceptionOr<void> Element::set_pointer_capture(WebIDL::Long pointer_id)
+ {
+-    (void)pointer_id;
+-    dbgln("FIXME: Implement Element::setPointerCapture()");
++    // https://w3c.github.io/pointerevents/#dom-element-setpointercapture
++    auto& node_document = document();
++    if (!node_document.is_pointer_active(pointer_id))
++        return WebIDL::NotFoundError::create("The pointerId does not identify an active pointer"_utf16);
++
++    // 5. If the pointer is not in the active buttons state or this is not the active document, terminate these steps.
++    if (!node_document.is_fully_active() || !is_connected())
++        return {};
++
++    // 6. Set the pending pointer capture target override for pointerId to this.
++    node_document.set_pending_pointer_capture_target(pointer_id, this);
++    return {};
+ }
+ 
+-void Element::release_pointer_capture(WebIDL::Long pointer_id)
++WebIDL::ExceptionOr<void> Element::release_pointer_capture(WebIDL::Long pointer_id)
+ {
+-    (void)pointer_id;
+-    dbgln("FIXME: Implement Element::releasePointerCapture()");
++    // https://w3c.github.io/pointerevents/#dom-element-releasepointercapture
++    auto& node_document = document();
++    if (!node_document.is_pointer_active(pointer_id))
++        return WebIDL::NotFoundError::create("The pointerId does not identify an active pointer"_utf16);
++
++    if (!has_pointer_capture(pointer_id))
++        return {};
++
++    node_document.set_pending_pointer_capture_target(pointer_id, nullptr);
++    return {};
+ }
+ 
+ bool Element::has_pointer_capture(WebIDL::Long pointer_id)
+ {
+-    (void)pointer_id;
+-    dbgln("FIXME: Implement Element::hasPointerCapture()");
+-    return false;
++    // https://w3c.github.io/pointerevents/#dom-element-haspointercapture
++    return document().pending_pointer_capture_target(pointer_id).ptr() == this;
+ }
+ 
+ GC::Ptr<NamedNodeMap> Element::attributes()
+diff --git a/Libraries/LibWeb/DOM/Element.h b/Libraries/LibWeb/DOM/Element.h
+index ab7477be11..ad2ff7680c 100644
+--- a/Libraries/LibWeb/DOM/Element.h
++++ b/Libraries/LibWeb/DOM/Element.h
+@@ -800,8 +800,8 @@ public:
+     // https://drafts.csswg.org/css-view-transitions-1/#capture-the-image
+     Optional<Gfx::DecodedImageFrame> capture_the_image();
+ 
+-    void set_pointer_capture(WebIDL::Long pointer_id);
+-    void release_pointer_capture(WebIDL::Long pointer_id);
++    WebIDL::ExceptionOr<void> set_pointer_capture(WebIDL::Long pointer_id);
++    WebIDL::ExceptionOr<void> release_pointer_capture(WebIDL::Long pointer_id);
+     bool has_pointer_capture(WebIDL::Long pointer_id);
+ 
+     virtual bool contributes_a_script_blocking_style_sheet() const { return false; }
+diff --git a/Libraries/LibWeb/Page/EventHandler.cpp b/Libraries/LibWeb/Page/EventHandler.cpp
+index d9a73ae258..e28c4151bc 100644
+--- a/Libraries/LibWeb/Page/EventHandler.cpp
++++ b/Libraries/LibWeb/Page/EventHandler.cpp
+@@ -3567,6 +3567,43 @@ EventHandler::PointerEventDispatchResult EventHandler::dispatch_a_pointer_event_
+         }
+         VERIFY_NOT_REACHED();
+     }();
++
++    WebIDL::Long const pointer_id = 0; // Platform mouse events currently use the default PointerEvent ID.
++    auto dispatch_capture_event = [&](auto const& name, DOM::EventTarget& target) {
++        auto event = MUST(UIEvents::PointerEvent::create_from_platform_event(relevant_global_object, m_navigable->active_window_proxy(), name, screen_position, coordinates.page_offset, coordinates.viewport_position, coordinates.offset, movement, button, buttons, modifiers));
++        target.dispatch_event(event);
++    };
++    auto process_pending_pointer_capture = [&] {
++        auto current_target = document.pointer_capture_target(pointer_id);
++        auto pending_target = document.pending_pointer_capture_target(pointer_id);
++        if (pending_target && !pending_target->is_connected()) {
++            document.set_pending_pointer_capture_target(pointer_id, nullptr);
++            pending_target = nullptr;
++        }
++
++        if (current_target && !current_target->is_connected()) {
++            dispatch_capture_event(UIEvents::EventNames::lostpointercapture, document);
++            document.set_pointer_capture_target(pointer_id, nullptr);
++            current_target = nullptr;
++        }
++
++        if (current_target != pending_target) {
++            if (current_target)
++                dispatch_capture_event(UIEvents::EventNames::lostpointercapture, *current_target);
++
++            // Event listeners can change the pending target while got/lost events are being dispatched.
++            pending_target = document.pending_pointer_capture_target(pointer_id);
++            if (pending_target && !pending_target->is_connected()) {
++                document.set_pending_pointer_capture_target(pointer_id, nullptr);
++                pending_target = nullptr;
++            }
++
++            if (pending_target)
++                dispatch_capture_event(UIEvents::EventNames::gotpointercapture, *pending_target);
++            document.set_pointer_capture_target(pointer_id, pending_target);
++        }
++    };
++
+     auto pointer_event = MUST(UIEvents::PointerEvent::create_from_platform_event(relevant_global_object, m_navigable->active_window_proxy(), pointer_event_name, screen_position, coordinates.page_offset, coordinates.viewport_position, coordinates.offset, movement, button, buttons, modifiers));
+ 
+     // FIXME: 1. If the isPrimary property for the pointer event to be dispatched is false then dispatch the
+@@ -3603,12 +3640,26 @@ EventHandler::PointerEventDispatchResult EventHandler::dispatch_a_pointer_event_
+     if (!dispatch_chrome_widget_pointer_event(chrome_widget, pointer_event_name, button, coordinates.visual_viewport_position))
+         return PointerEventDispatchResult::SwallowedByChromeWidget;
+ 
++    if (type == PointerEventType::PointerDown)
++        document.set_pointer_active(pointer_id, true);
++    process_pending_pointer_capture();
++    GC::Ptr<DOM::Node> event_target = document.pointer_capture_target(pointer_id);
++    if (!event_target)
++        event_target = node;
++
+     // FIXME: This will be moved to the click event and need to track the targets of the pointerdown and pointerup events.
+     //        https://github.com/w3c/pointerevents/pull/460
+-    light_dismiss_activities(pointer_event, *node);
++    light_dismiss_activities(pointer_event, *event_target);
+ 
+     // 3. Dispatch the pointer event.
+-    bool pointer_event_cancelled = !node->dispatch_event(pointer_event);
++    bool pointer_event_cancelled = !event_target->dispatch_event(pointer_event);
++
++    // 9. Immediately after pointerup or pointercancel, release pointer capture and notify its former target.
++    if (type == PointerEventType::PointerUp || type == PointerEventType::PointerCancel) {
++        document.set_pending_pointer_capture_target(pointer_id, nullptr);
++        process_pending_pointer_capture();
++        document.set_pointer_active(pointer_id, false);
++    }
+ 
+     // 4. If the pointer event dispatched was pointerdown and event's canceled flag is set, then set the PREVENT MOUSE
+     //    EVENT flag for this pointerType.
+@@ -3618,7 +3669,7 @@ EventHandler::PointerEventDispatchResult EventHandler::dispatch_a_pointer_event_
+     // 5. If the PREVENT MOUSE EVENT flag is not set for this pointerType and the pointer event dispatched was:
+     bool run_default_activation_behavior = false;
+     if (!m_prevent_mouse_event) {
+-        GC::Ptr<DOM::EventTarget> mouse_event_target = node;
++        GC::Ptr<DOM::EventTarget> mouse_event_target = event_target;
+         auto mouse_event_name = [&] {
+             switch (type) {
+             // - pointerdown, then fire a mousedown event.
