@@ -79,8 +79,7 @@ index eed2a90307..49f5e57777 100644
      // A page created to host documents of the tab in another process takes the preferences the view's page has.
      void send_preferences_to_page(Badge<WebContentClient>, WebContentPage&);
  
-@@ -749,6 +750,7 @@ protected:
-     Web::DevicePixelSize m_backup_bitmap_size;
+@@ -752,5 +752,6 @@ protected:
      Gfx::Color m_page_background_color { 255, 255, 255 };
      Gfx::Color m_system_canvas_background_color { 255, 255, 255 };
 +    bool m_transparent_background { false };
