@@ -14,6 +14,7 @@
 - Create a reliable release and packaging system
 - Expand automated testing for Photon-specific engine changes
 - Implement a lightweight highly customisable native rust and/or c++ based adblocker for websites, and especially youtube, directly into the browser engine. (read ADBLOCKER.md)
+- animated favicons for websites for some reason
 
 # In progress
 
