@@ -106,15 +106,25 @@ enum UpstreamCommand {
 enum PatchCommand {
     /// Show the registered patches and generated engine tree state
     Status,
-    /// Check that the complete series applies to the recorded base
+    /// Check that the enabled series applies to the recorded base
     Check,
+    /// Enable one patch by its series ID
+    Enable(PatchIdArgs),
+    /// Disable one patch by its series ID
+    Disable(PatchIdArgs),
     /// Capture edits from .photon/worktree into a numbered, registered patch
     Capture(ApplyPatchArgs),
 }
 
+#[derive(Debug, Args)]
+struct PatchIdArgs {
+    /// Patch ID shown by `./photon patches status`
+    id: String,
+}
+
 #[derive(Debug, Subcommand)]
 enum EngineCommand {
-    /// Create or refresh Build/Source with upstream plus the registered series
+    /// Create or refresh Build/Source with upstream plus the enabled series
     Materialize,
     /// Create .photon/worktree for Ladybird source development
     Edit,
@@ -226,6 +236,12 @@ fn run() -> Result<i32> {
         Command::Patches {
             command: PatchCommand::Check,
         } => patches::check(&repository),
+        Command::Patches {
+            command: PatchCommand::Enable(args),
+        } => patches::set_enabled(&repository, &args.id, true),
+        Command::Patches {
+            command: PatchCommand::Disable(args),
+        } => patches::set_enabled(&repository, &args.id, false),
         Command::Patches {
             command: PatchCommand::Capture(args),
         } => patches::capture(&repository, &args.name, &args.area),

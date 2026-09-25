@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -80,6 +81,14 @@ pub(crate) fn edit_tree(repository: &Path) -> PathBuf {
     worktree_root(repository).join("Edit")
 }
 
+pub(crate) fn has_build_tree(repository: &Path) -> bool {
+    build_tree(repository).exists()
+}
+
+pub(crate) fn has_edit_tree(repository: &Path) -> bool {
+    edit_tree(repository).exists()
+}
+
 pub(crate) fn materialized(repository: &Path) -> Result<bool> {
     let tree = build_tree(repository);
     if !tree.exists() {
@@ -126,6 +135,189 @@ fn verify_edit_tree_path(repository: &Path, tree: &Path) -> Result<()> {
 
 pub(crate) fn verify_edit_tree_with_series(repository: &Path, tree: &Path, patches: &[Patch]) -> Result<()> {
     verify_tree_with_series(repository, tree, patches)
+}
+
+/// Replace the patch materialization in existing generated trees without
+/// removing their source worktrees or build directories.
+pub(crate) fn refresh_generated_patch_series(
+    repository: &Path,
+    old_patches: &[Patch],
+    new_patches: &[Patch],
+) -> Result<()> {
+    let trees = [build_tree(repository), edit_tree(repository)];
+    let mut affected_paths = patches::patch_paths(repository, old_patches)?;
+    affected_paths.extend(patches::patch_paths(repository, new_patches)?);
+
+    // Validate every tree before changing either one. In particular, do not
+    // reset an edit tree that contains changes outside the registered series.
+    for tree in &trees {
+        if tree.exists() {
+            verify_tree_with_series(repository, tree, old_patches)?;
+        }
+    }
+
+    for tree in trees {
+        if tree.exists() {
+            reconcile_tree_patch_series(repository, &tree, new_patches, &affected_paths)?;
+        }
+    }
+    Ok(())
+}
+
+/// Restore the requested patch set after a failed in-place refresh.
+pub(crate) fn restore_generated_patch_series(
+    repository: &Path,
+    patches: &[Patch],
+    attempted_patches: &[Patch],
+) -> Result<()> {
+    let mut affected_paths = patches::patch_paths(repository, patches)?;
+    affected_paths.extend(patches::patch_paths(repository, attempted_patches)?);
+    for tree in [build_tree(repository), edit_tree(repository)] {
+        if tree.exists() {
+            reconcile_tree_patch_series(repository, &tree, patches, &affected_paths)?;
+        }
+    }
+    Ok(())
+}
+
+/// Calculate desired patched contents from pristine source and touch only files
+/// whose contents or permissions differ from the existing generated tree.
+fn reconcile_tree_patch_series(
+    repository: &Path,
+    tree: &Path,
+    patches: &[Patch],
+    affected_paths: &HashSet<PathBuf>,
+) -> Result<()> {
+    let temporary = std::env::temp_dir().join(format!("photon-patch-reconcile-{}", std::process::id()));
+    if temporary.exists() {
+        fs::remove_dir_all(&temporary)?;
+    }
+    fs::create_dir_all(&temporary)?;
+
+    let result = (|| {
+        let upstream = metadata::read_upstream(&repository.join("Meta/Photon/upstream.toml"))?;
+        let archive = temporary.join("base.tar");
+        let mut upstream_paths = Vec::new();
+        for path in affected_paths {
+            let object = format!("{}:{}", upstream.revision, path.display());
+            let exists = Command::new("git")
+                .args(["cat-file", "-e", &object])
+                .current_dir(repository)
+                .stderr(std::process::Stdio::null())
+                .status()?
+                .success();
+            if exists {
+                upstream_paths.push(path);
+            }
+        }
+        let base = temporary.join("base");
+        fs::create_dir(&base)?;
+        if !upstream_paths.is_empty() {
+            let mut archive_command = Command::new("git");
+            archive_command
+                .args(["archive", "--format=tar", "-o"])
+                .arg(&archive)
+                .arg(&upstream.revision)
+                .arg("--")
+                .current_dir(repository);
+            for path in upstream_paths {
+                archive_command.arg(path);
+            }
+            git_success_command(&mut archive_command, "export patched paths from recorded upstream")?;
+
+            let mut tar = Command::new("tar");
+            tar.args(["-xf"]).arg(&archive).arg("-C").arg(&base);
+            let status = tar.status().context("failed to extract upstream source files")?;
+            if !status.success() {
+                bail!("failed to extract upstream source files");
+            }
+            fs::remove_file(&archive)?;
+        }
+
+        for patch in patches {
+            let patch_file = repository.join("Patches").join(&patch.file);
+            let mut check = filtered_patch_command(&base, &patch_file, affected_paths, true);
+            git_success_command(&mut check, &format!("check patch {}", patch.id))?;
+
+            let mut apply = filtered_patch_command(&base, &patch_file, affected_paths, false);
+            git_success_command(&mut apply, &format!("apply patch {}", patch.id))?;
+        }
+
+        for path in affected_paths {
+            let current = tree.join(path);
+            let desired = base.join(path);
+            if desired.is_file() {
+                let desired_contents = fs::read(&desired)?;
+                let desired_permissions = fs::metadata(&desired)?.permissions();
+                let current_matches = current.is_file()
+                    && fs::read(&current).is_ok_and(|contents| contents == desired_contents)
+                    && fs::metadata(&current)
+                        .is_ok_and(|metadata| permissions_equal(&metadata.permissions(), &desired_permissions));
+                if !current_matches {
+                    replace_file(&current, &desired_contents, desired_permissions)?;
+                }
+            } else {
+                match fs::symlink_metadata(&current) {
+                    Ok(_) => fs::remove_file(current)?,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        }
+
+        verify_tree_with_series(repository, tree, patches)
+    })();
+
+    fs::remove_dir_all(&temporary).context("failed to remove temporary patch reconciliation files")?;
+    result
+}
+
+fn filtered_patch_command(directory: &Path, patch: &Path, paths: &HashSet<PathBuf>, check: bool) -> Command {
+    let mut command = Command::new("git");
+    command.arg("apply");
+    if check {
+        command.arg("--check");
+    }
+    for path in paths {
+        command.arg(format!("--include={}", path.to_string_lossy()));
+    }
+    command.arg(patch).current_dir(directory);
+    command
+}
+
+fn git_success_command(command: &mut Command, operation: &str) -> Result<()> {
+    let status = command.status().with_context(|| format!("failed to {operation}"))?;
+    if !status.success() {
+        bail!("failed to {operation}");
+    }
+    Ok(())
+}
+
+fn replace_file(path: &Path, contents: &[u8], permissions: fs::Permissions) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut temporary_path = path.as_os_str().to_owned();
+    temporary_path.push(format!(".photon-{}.tmp", std::process::id()));
+    let temporary_path = PathBuf::from(temporary_path);
+    fs::write(&temporary_path, contents)?;
+    fs::set_permissions(&temporary_path, permissions)?;
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    fs::rename(temporary_path, path)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn permissions_equal(left: &fs::Permissions, right: &fs::Permissions) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    left.mode() == right.mode()
+}
+
+#[cfg(not(unix))]
+fn permissions_equal(left: &fs::Permissions, right: &fs::Permissions) -> bool {
+    left.readonly() == right.readonly()
 }
 
 pub(crate) fn discard_build_tree(repository: &Path) -> Result<()> {

@@ -10,20 +10,36 @@ use crate::metadata::{self, Patch};
 use crate::ui;
 
 pub fn status(repository: &Path) -> Result<i32> {
-    let patches = series(repository)?;
+    let all_patches = all_series(repository)?;
+    let patches = all_patches
+        .iter()
+        .filter(|patch| patch.enabled)
+        .cloned()
+        .collect::<Vec<_>>();
     let upstream = metadata::read_upstream(&repository.join("Meta/Photon/upstream.toml"))?;
-    if patches.is_empty() {
-        ui::header("Photon", Some("Patches"));
-        ui::note("Series", "empty");
-        return Ok(0);
-    }
-
-    ui::header("Photon", Some(&format!("Patches · {}", patches.len())));
+    ui::header(
+        "Photon",
+        Some(&format!(
+            "Patches · {} active / {} registered",
+            patches.len(),
+            all_patches.len()
+        )),
+    );
     let owned_paths = patch_paths(repository, &patches)?;
     verify_pristine_files(repository, &patches, &upstream.revision)
         .context("canonical Ladybird source must remain pristine; use `./photon engine edit`")?;
     let materialized = crate::engine::status_tree(repository)?;
-    for patch in &patches {
+    for patch in &all_patches {
+        if !patch.enabled {
+            println!(
+                "  {} {:<8} {} {}",
+                style("–").dim(),
+                patch.id,
+                patch.description,
+                style(format!("({} · disabled)", patch.area)).dim()
+            );
+            continue;
+        }
         if let Some(tree) = materialized {
             println!(
                 "  {} {:<8} {} {}",
@@ -169,9 +185,7 @@ pub fn capture(repository: &Path, name: &str, area: &str) -> Result<i32> {
         bail!("no engine edit tree exists; run `./photon engine edit` first");
     }
     let patches = series(repository)?;
-    if patches.is_empty() {
-        bail!("cannot capture a patch without an existing registered series");
-    }
+    let all_patches = all_series(repository)?;
     crate::engine::verify_edit_tree(repository)?;
 
     let staged_engine_paths = staged_paths(&edit_tree)?;
@@ -250,7 +264,7 @@ pub fn capture(repository: &Path, name: &str, area: &str) -> Result<i32> {
         return Ok(0);
     }
 
-    let next_id = patches
+    let next_id = all_patches
         .iter()
         .filter_map(|patch| patch.id.parse::<u32>().ok())
         .max()
@@ -605,7 +619,66 @@ pub(crate) fn check_in(repository: &Path, temporary: &Path, revision: &str, patc
 }
 
 pub(crate) fn series(repository: &Path) -> Result<Vec<Patch>> {
+    Ok(all_series(repository)?
+        .into_iter()
+        .filter(|patch| patch.enabled)
+        .collect())
+}
+
+fn all_series(repository: &Path) -> Result<Vec<Patch>> {
     metadata::read_patch_series(&repository.join("Patches/series.toml"))
+}
+
+/// Enable or disable an individual patch and safely refresh any generated trees.
+pub fn set_enabled(repository: &Path, id: &str, enabled: bool) -> Result<i32> {
+    let all_patches = all_series(repository)?;
+    let old_patches = series(repository)?;
+    let patch = all_patches
+        .iter()
+        .find(|patch| patch.id == id)
+        .with_context(|| format!("unknown patch ID `{id}`"))?;
+    if patch.enabled == enabled {
+        ui::note(id, if enabled { "already enabled" } else { "already disabled" });
+        return Ok(0);
+    }
+
+    // Verify before cleaning so no generated tree with uncaptured engine edits is removed.
+    if status(repository)? != 0 {
+        bail!("cannot change patch state while the patch series has unrepresented edits");
+    }
+    let had_generated_trees = crate::engine::has_build_tree(repository) || crate::engine::has_edit_tree(repository);
+
+    let manifest = repository.join("Patches/series.toml");
+    let previous = fs::read_to_string(&manifest)?;
+    metadata::set_patch_enabled(&manifest, id, enabled)?;
+    let new_patches = match series(repository) {
+        Ok(patches) => patches,
+        Err(error) => {
+            fs::write(&manifest, previous).context("failed to restore patch manifest after parse error")?;
+            return Err(error);
+        }
+    };
+    let refresh = if had_generated_trees {
+        crate::engine::refresh_generated_patch_series(repository, &old_patches, &new_patches)
+    } else {
+        Ok(())
+    };
+    if let Err(error) = refresh {
+        fs::write(&manifest, previous).context("failed to restore patch manifest after refresh error")?;
+        // Best effort restoration of the previous patch set; source/build trees stay in place.
+        let _ = crate::engine::restore_generated_patch_series(repository, &old_patches, &new_patches);
+        return Err(error).context("failed to refresh generated engine trees after changing patch state");
+    }
+
+    ui::header("Photon", Some("Patch state updated"));
+    ui::ok(id, if enabled { "enabled" } else { "disabled" });
+    if had_generated_trees {
+        ui::ok(
+            "Generated engine trees",
+            "updated in place; existing build artifacts retained",
+        );
+    }
+    Ok(0)
 }
 
 fn patch_path(repository: &Path, patch: &Patch) -> Result<PathBuf> {
