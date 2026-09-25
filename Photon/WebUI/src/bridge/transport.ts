@@ -16,6 +16,7 @@ export type PhotonCommand =
     | { kind: "set-theme"; mode: ThemeMode }
     | { kind: "set-force-dark-pages"; enabled: boolean }
     | { kind: "set-dim-overlays"; enabled: boolean }
+    | { kind: "set-window-tint-opacity"; opacity: number }
     | { kind: "window-minimize" }
     | { kind: "window-maximize" }
     | { kind: "window-toggle-maximize" }
@@ -36,14 +37,48 @@ export type PhotonTransportEvent =
 /** Dispatch Photon commands only through the trusted native messaging channel. */
 export function createPhotonCommandTransport(): PhotonCommandTransport {
     const listeners = new Set<(event: PhotonTransportEvent) => void>();
-    let missingBridgeReported = false;
+    const pendingCommands: PhotonCommand[] = [];
+    let bridgePoll: number | undefined;
+    let bridgePollAttempts = 0;
+
+    const flushPendingCommands = (): void => {
+        const nativeChannel = window.embedderMessaging;
+        if (!nativeChannel) {
+            if (++bridgePollAttempts >= 100) {
+                pendingCommands.length = 0;
+                bridgePoll = undefined;
+                console.error("Photon command was not sent: the trusted native messaging channel is unavailable.");
+                return;
+            }
+            bridgePoll = window.setTimeout(flushPendingCommands, 10);
+            return;
+        }
+        bridgePoll = undefined;
+        bridgePollAttempts = 0;
+        for (const command of pendingCommands.splice(0)) {
+            const { type, payload } = serializeNativeCommand(command);
+            nativeChannel.postMessage(type, payload);
+        }
+    };
+
+    // Ladybird installs the trusted document binding after top-level load
+    // completion. Keep commands issued during that short window until it is
+    // ready, and discard them if this document is replaced.
+    window.addEventListener("pagehide", () => {
+        pendingCommands.length = 0;
+        if (bridgePoll !== undefined) window.clearTimeout(bridgePoll);
+        bridgePoll = undefined;
+        bridgePollAttempts = 0;
+    }, { once: true });
+
     return {
         dispatch(command) {
             const nativeChannel = window.embedderMessaging;
             if (!nativeChannel) {
-                if (!missingBridgeReported) {
-                    console.error("Photon command was not sent: the trusted native messaging channel is unavailable.");
-                    missingBridgeReported = true;
+                pendingCommands.push(command);
+                if (bridgePoll === undefined) {
+                    bridgePollAttempts = 0;
+                    bridgePoll = window.setTimeout(flushPendingCommands, 0);
                 }
                 return;
             }
@@ -119,6 +154,8 @@ function serializeNativeCommand(command: PhotonCommand): { type: string; payload
         case "set-dim-overlays":
         case "set-force-dark-pages":
             return { type: command.kind, payload: { enabled: command.enabled } };
+        case "set-window-tint-opacity":
+            return { type: command.kind, payload: { opacity: command.opacity } };
         case "window-start-system-move":
         case "window-minimize":
         case "window-maximize":
