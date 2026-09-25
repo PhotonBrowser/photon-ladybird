@@ -1,5 +1,7 @@
 # Ladybird upstream workflow
 
+For a step-by-step guide, see [Tutorial: syncing Photon with Ladybird](Sync-Tutorial.md).
+
 The expected remotes are:
 
 ```text
