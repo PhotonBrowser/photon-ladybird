@@ -95,6 +95,27 @@ export function SettingsPage({
                                 type="checkbox"
                             />
                         </label>
+                        <div className="photon-settings-range-row">
+                            <label className="photon-settings-copy" htmlFor="window-tint-opacity">
+                                <span className="photon-settings-toggle-title">Window tint</span>
+                                <span className="photon-settings-toggle-description">
+                                    Adjust the color overlay. Blur strength is controlled by your Wayland compositor.
+                                </span>
+                            </label>
+                            <div className="photon-settings-range-control">
+                                <input
+                                    id="window-tint-opacity"
+                                    max="100"
+                                    min="0"
+                                    onChange={(event) =>
+                                        api.settings.setWindowTintOpacity(Number(event.currentTarget.value))
+                                    }
+                                    type="range"
+                                    value={snapshot.windowTintOpacity}
+                                />
+                                <output htmlFor="window-tint-opacity">{snapshot.windowTintOpacity}%</output>
+                            </div>
+                        </div>
                     </section>
                     <section aria-labelledby="privacy-title" className="photon-settings-group">
                         <div className="photon-settings-copy">

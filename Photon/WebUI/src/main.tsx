@@ -25,6 +25,7 @@ const developmentSnapshot: BrowserSnapshot = {
     themeMode: "system",
     forceDarkPages: false,
     dimOverlays: false,
+    windowTintOpacity: 95,
 };
 
 const snapshotFromDevServer = (): BrowserSnapshot | undefined => {
@@ -70,6 +71,7 @@ const photon: PhotonApi = {
         setTheme: (mode) => commandTransport.dispatch({ kind: "set-theme", mode }),
         setForceDarkPages: (enabled) => commandTransport.dispatch({ kind: "set-force-dark-pages", enabled }),
         setDimOverlays: (enabled) => commandTransport.dispatch({ kind: "set-dim-overlays", enabled }),
+        setWindowTintOpacity: (opacity) => commandTransport.dispatch({ kind: "set-window-tint-opacity", opacity }),
     },
     window: {
         platform,
@@ -97,6 +99,7 @@ commandTransport.subscribe((event) => {
         if (!isBrowserSnapshot(event.detail)) return;
         snapshot = event.detail;
         applyTheme(event.detail.themeMode);
+        applyWindowTintOpacity(event.detail.windowTintOpacity);
         for (const listener of listeners) listener(event.detail);
     } else if (event.type === "page-tooltip") {
         window.dispatchEvent(new CustomEvent("photon-ui-page-tooltip", { detail: event.detail }));
@@ -115,15 +118,34 @@ function isBrowserSnapshot(value: unknown): value is BrowserSnapshot {
         typeof candidate.activeTabId === "string" &&
         parseThemeMode(candidate.themeMode) !== undefined &&
         typeof candidate.forceDarkPages === "boolean" &&
-        typeof candidate.dimOverlays === "boolean"
+        typeof candidate.dimOverlays === "boolean" &&
+        typeof candidate.windowTintOpacity === "number" &&
+        Number.isInteger(candidate.windowTintOpacity) &&
+        candidate.windowTintOpacity >= 0 &&
+        candidate.windowTintOpacity <= 100
     );
 }
 
+const darkThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+
+// `system` is resolved to a concrete value here rather than in CSS, so the
+// stylesheet carries a single dark palette instead of one per colour-scheme
+// source that has to be kept in sync by hand.
 function applyTheme(mode: ThemeMode): void {
-    document.documentElement.dataset.theme = mode;
+    const resolved = mode === "system" && darkThemeQuery.matches ? "dark" : mode === "system" ? "light" : mode;
+    document.documentElement.dataset.theme = resolved;
+}
+
+darkThemeQuery.addEventListener("change", () => {
+    if (snapshot.themeMode === "system") applyTheme(snapshot.themeMode);
+});
+
+function applyWindowTintOpacity(opacity: number): void {
+    document.documentElement.style.setProperty("--photon-window-tint-opacity", `${opacity}%`);
 }
 
 applyTheme(snapshot.themeMode);
+applyWindowTintOpacity(snapshot.windowTintOpacity);
 
 const rootElement = document.getElementById("root");
 if (!rootElement) throw new Error("Photon Web UI root element is missing");

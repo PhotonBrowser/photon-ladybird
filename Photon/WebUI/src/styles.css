@@ -28,7 +28,6 @@
 
     /* Semantic spacing scale */
     --photon-space-1: 2px;
-    --photon-space-1-5: 3px;
     --photon-space-2: 4px;
     --photon-space-3: 6px;
     --photon-space-4: 8px;
@@ -55,7 +54,6 @@
     --photon-line-height-heading: 1.1;
     --photon-tracking-heading: -0.02em;
     --photon-tracking-display: -0.04em;
-    --photon-icon-size-xs: 12px;
     --photon-icon-size-sm: 14px;
     --photon-icon-size-md: 16px;
     --photon-icon-size-lg: 18px;
@@ -68,6 +66,11 @@
     --photon-radius-field: 10px;
     --photon-radius-popover: 12px;
     --photon-radius-panel: 16px;
+    /* A radius one step tighter than its container, for nested affordances
+       such as a close button sitting inside an already-rounded tab. */
+    --photon-radius-nested: 4px;
+    /* The page tooltip mirrors a native surface, so it stays on its own radius. */
+    --photon-radius-tooltip: 4px;
     --photon-motion-fast: 110ms;
     --photon-motion-reduced: 1ms;
     --photon-motion-spinner: 900ms;
@@ -86,7 +89,6 @@
     --photon-page-frame-radius: calc(var(--photon-page-radius) + var(--photon-page-inset));
     --photon-control-size: 28px;
     --photon-tab-height: 29px;
-    --photon-tab-min-width: 82px;
     --photon-tab-max-width: 238px;
     --photon-tab-default-width: 190px;
     --photon-tab-close-size: 22px;
@@ -95,6 +97,8 @@
     --photon-site-info-control-size: 24px;
     --photon-settings-control-min-width: 120px;
     --photon-settings-control-height: 34px;
+    --photon-checkbox-size: 16px;
+    --photon-brand-logo-size: 40px;
     --photon-menu-width: 224px;
     --photon-menu-padding: var(--photon-space-2);
     --photon-menu-item-height: 32px;
@@ -103,14 +107,23 @@
     --photon-settings-width: 680px;
     --photon-security-popover-width: 320px;
     --photon-content-gutter: var(--photon-space-12);
-    --photon-toolbar-gutter: var(--photon-space-5);
+    --photon-chrome-gutter: var(--photon-space-5);
+    /* The new tab centres inside the page region, which starts below the chrome,
+       so a true window centre reads low. Lift the lockup by a fraction of that
+       offset (half the chrome height) to land on the optical centre. */
+    --photon-new-tab-lift: var(--photon-space-4);
     --photon-color-tab-hover: color-mix(in srgb, var(--photon-color-surface-raised) 42%, transparent);
     --photon-opacity-disabled: 0.42;
     --photon-scale-popover-enter: 0.98;
 
     /* Light palette */
     --photon-color-canvas: #f4f5f6;
-    --photon-color-window-tint: color-mix(in srgb, var(--photon-color-canvas) 95%, transparent);
+    --photon-window-tint-opacity: 95%;
+    --photon-color-window-tint: color-mix(
+        in srgb,
+        var(--photon-color-canvas) var(--photon-window-tint-opacity),
+        transparent
+    );
     --photon-color-surface: #e9ebed;
     --photon-color-surface-raised: #ffffff;
     --photon-color-surface-hover: #dfe2e5;
@@ -120,6 +133,10 @@
     --photon-color-accent: #2d5bd1;
     --photon-color-accent-foreground: #ffffff;
     --photon-color-danger: #b42318;
+    --photon-color-danger-strong: #d92d20;
+    /* Glyph colour on a solid danger fill. Stays white in both themes so the
+       destructive close button keeps its contrast on red. */
+    --photon-color-on-danger: #ffffff;
     --photon-color-scrim: rgb(0 0 0 / 24%);
 
     /* HeroUI semantic aliases */
@@ -146,26 +163,8 @@
     --focus: var(--photon-color-accent);
 }
 
-@media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-        color-scheme: dark;
-        --photon-color-canvas: #1e2023;
-        --photon-color-surface: #292c30;
-        --photon-color-surface-raised: #303338;
-        --photon-color-surface-hover: #3a3e44;
-        --photon-color-border: #44484f;
-        --photon-color-text-primary: #e7e9ed;
-        --photon-color-text-secondary: #b6bbc3;
-        --photon-color-accent: #a9bdff;
-        --photon-color-accent-foreground: #1b2b50;
-        --photon-color-danger: #ffb4ab;
-        --photon-color-scrim: rgb(0 0 0 / 40%);
-        --photon-shadow-popover: 0 12px 32px rgb(0 0 0 / 38%), 0 2px 6px rgb(0 0 0 / 24%);
-        --photon-shadow-panel: 0 1px 2px rgb(0 0 0 / 28%);
-        --field-background: var(--photon-color-surface-raised);
-    }
-}
-
+/* `system` is resolved to a concrete theme in main.tsx, so these two blocks are
+   the only place a palette is defined. */
 :root[data-theme="light"] {
     color-scheme: light;
 }
@@ -289,12 +288,12 @@ button {
 .photon-page-tooltip {
     position: fixed;
     z-index: 4;
-    max-width: min(560px, calc(100vw - 16px));
-    max-height: calc(100vh - 16px);
+    max-width: min(560px, calc(100vw - var(--photon-space-8)));
+    max-height: calc(100vh - var(--photon-space-8));
     overflow: hidden;
-    padding: 6px 8px;
-    border: 1px solid rgb(255 255 255 / 16%);
-    border-radius: 4px;
+    padding: var(--photon-space-3) var(--photon-space-4);
+    border: var(--photon-border-width) solid rgb(255 255 255 / 16%);
+    border-radius: var(--photon-radius-tooltip);
     background: rgb(32 33 36 / 98%);
     box-shadow: 0 2px 8px rgb(0 0 0 / 24%);
     color: #f1f3f4;
@@ -316,7 +315,7 @@ button {
     height: var(--photon-titlebar-height);
     min-width: 0;
     align-items: center;
-    padding: var(--photon-space-2) var(--photon-space-5) 0;
+    padding: var(--photon-space-2) var(--photon-chrome-gutter) 0;
     background: transparent;
     user-select: none;
 }
@@ -565,7 +564,7 @@ button {
     width: var(--photon-tab-close-size);
     min-width: var(--photon-tab-close-size);
     height: var(--photon-tab-close-size);
-    border-radius: calc(var(--photon-radius-control) - var(--photon-space-2));
+    border-radius: var(--photon-radius-nested);
     opacity: 0;
     transform: translateY(-50%);
     transition:
@@ -605,23 +604,20 @@ button {
     stroke-width: 3;
 }
 
-.photon-window-minimize-icon {
-    width: 16px;
-    height: 16px;
-}
+.photon-window-minimize-icon,
 .photon-window-close-icon {
-    width: 16px;
-    height: 16px;
+    width: var(--photon-icon-size-md);
+    height: var(--photon-icon-size-md);
 }
 
 .photon-window-maximize-icon {
-    width: 14px;
-    height: 14px;
+    width: var(--photon-icon-size-sm);
+    height: var(--photon-icon-size-sm);
 }
 
 .photon-window-close:hover:not([aria-disabled="true"]):not(:disabled) {
-    background: #d92d20;
-    color: white;
+    background: var(--photon-color-danger-strong);
+    color: var(--photon-color-on-danger);
 }
 
 .photon-toolbar {
@@ -630,7 +626,7 @@ button {
     min-width: 0;
     align-items: center;
     gap: var(--photon-space-2);
-    padding: var(--photon-space-1) var(--photon-toolbar-gutter);
+    padding: var(--photon-space-1) var(--photon-chrome-gutter);
     background: transparent;
     pointer-events: auto;
 }
@@ -659,7 +655,6 @@ button {
     border: var(--photon-border-width) solid transparent;
     border-radius: var(--photon-radius-field);
     background: var(--photon-color-surface);
-    box-shadow: none;
     transition:
         border-color var(--photon-motion-fast) var(--photon-ease-standard),
         background-color var(--photon-motion-fast) var(--photon-ease-standard);
@@ -668,13 +663,12 @@ button {
 .photon-omnibox:focus-within {
     border-color: var(--photon-color-border);
     background: var(--photon-color-surface-hover);
-    box-shadow: none;
 }
 
 .photon-site-info-button {
-    width: var(--photon-space-12);
-    min-width: var(--photon-space-12);
-    height: var(--photon-space-12);
+    width: var(--photon-site-info-control-size);
+    min-width: var(--photon-site-info-control-size);
+    height: var(--photon-site-info-control-size);
 }
 
 .photon-omnibox .photon-address-input {
@@ -683,7 +677,7 @@ button {
     min-width: 0;
     flex: 1 1 auto;
     height: var(--photon-address-input-height);
-    padding-inline: var(--photon-space-2);
+    padding: 0;
     border: 0;
     outline: 0;
     background: transparent;
@@ -833,6 +827,7 @@ button {
     position: absolute;
     z-index: 1;
     overflow: auto;
+    padding-inline: var(--photon-content-gutter);
     background: var(--photon-color-window-tint);
     color: var(--photon-color-text-primary);
     inset: var(--photon-chrome-height) 0 0;
@@ -841,14 +836,18 @@ button {
 
 .photon-new-tab-page {
     display: grid;
-    place-items: center;
+    align-content: center;
+    justify-items: center;
+    padding-block: var(--photon-content-gutter);
 }
 
 .photon-new-tab-content {
     display: grid;
-    width: min(var(--photon-content-width), calc(100% - (2 * var(--photon-content-gutter))));
+    width: min(var(--photon-content-width), 100%);
     justify-items: center;
-    gap: var(--photon-space-8);
+    /* Optical centring. align-content already centres the lockup in the page
+       region; this lifts it slightly so it does not read as sitting low. */
+    translate: 0 calc(-1 * var(--photon-new-tab-lift));
 }
 
 .photon-new-tab-brand {
@@ -859,6 +858,8 @@ button {
 
 .photon-brand-logo {
     display: block;
+    width: var(--photon-brand-logo-size);
+    height: var(--photon-brand-logo-size);
     object-fit: contain;
 }
 
@@ -869,13 +870,9 @@ button {
     letter-spacing: var(--photon-tracking-display);
 }
 
-.photon-settings-page {
-    overflow: auto;
-}
-
 .photon-settings-content {
-    width: min(var(--photon-settings-width), calc(100% - (2 * var(--photon-content-gutter))));
-    margin: 0 auto;
+    width: min(var(--photon-settings-width), 100%);
+    margin-inline: auto;
     padding-block: var(--photon-space-16) var(--photon-space-24);
 }
 
@@ -948,9 +945,36 @@ button {
 }
 
 .photon-settings-toggle-row input {
-    width: 16px;
-    height: 16px;
+    width: var(--photon-checkbox-size);
+    height: var(--photon-checkbox-size);
     accent-color: var(--photon-color-accent);
+}
+
+.photon-settings-range-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--photon-space-5);
+    padding-block: var(--photon-space-3);
+}
+
+.photon-settings-range-control {
+    display: flex;
+    min-width: 190px;
+    align-items: center;
+    gap: var(--photon-space-3);
+}
+
+.photon-settings-range-control input {
+    width: 100%;
+    accent-color: var(--photon-color-accent);
+}
+
+.photon-settings-range-control output {
+    min-width: 3.5em;
+    color: var(--photon-color-text-secondary);
+    font-variant-numeric: tabular-nums;
+    text-align: end;
 }
 
 .photon-settings-copy {
@@ -989,7 +1013,6 @@ button {
     border-radius: var(--photon-radius-field);
     background: var(--photon-color-canvas);
     color: var(--photon-color-text-primary);
-    box-shadow: none;
 }
 
 .photon-settings-select-trigger:hover {
@@ -1009,7 +1032,7 @@ button {
 .photon-settings-select-item {
     min-height: var(--photon-settings-control-height);
     padding-inline: var(--photon-space-5);
-    border-radius: var(--photon-space-3);
+    border-radius: var(--photon-radius-control);
 }
 
 .photon-settings-select-item[data-focused="true"],
@@ -1020,7 +1043,7 @@ button {
 
 @media (max-width: 650px) {
     :root {
-        --photon-toolbar-gutter: var(--photon-space-3);
+        --photon-chrome-gutter: var(--photon-space-3);
         --photon-content-gutter: var(--photon-space-8);
         --photon-settings-control-min-width: 104px;
     }
@@ -1036,8 +1059,9 @@ button {
 }
 
 @media (max-height: 520px) {
-    .photon-new-tab-content {
-        gap: var(--photon-space-4);
+    /* Short windows: drop the optical lift so the lockup cannot crowd the chrome. */
+    :root {
+        --photon-new-tab-lift: 0px;
     }
 
     .photon-settings-content {

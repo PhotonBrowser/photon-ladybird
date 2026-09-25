@@ -18,6 +18,7 @@ export function useBrowserSnapshot(api: PhotonApi): BrowserSnapshot {
                         current.themeMode === next.themeMode &&
                         current.forceDarkPages === next.forceDarkPages &&
                         current.dimOverlays === next.dimOverlays &&
+                        current.windowTintOpacity === next.windowTintOpacity &&
                         current.tabs.length === tabs.length &&
                         tabs.every((tab, index) => tab === current.tabs[index]);
                     return unchanged ? current : { ...next, tabs };

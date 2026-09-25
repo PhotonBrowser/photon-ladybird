@@ -20,6 +20,7 @@ export interface BrowserSnapshot {
     themeMode: ThemeMode;
     forceDarkPages: boolean;
     dimOverlays: boolean;
+    windowTintOpacity: number;
 }
 
 export interface PhotonBrowser {
@@ -50,6 +51,7 @@ export interface PhotonSettings {
     setTheme(mode: ThemeMode): void;
     setForceDarkPages(enabled: boolean): void;
     setDimOverlays(enabled: boolean): void;
+    setWindowTintOpacity(opacity: number): void;
 }
 
 export interface PhotonWindow {
