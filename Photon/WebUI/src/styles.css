@@ -197,7 +197,7 @@ html,
 body,
 #root {
     position: relative;
-    width: 100%;
+    width: auto;
     height: 100%;
     min-width: 0;
     margin: 0;
@@ -306,6 +306,23 @@ button {
     white-space: pre-wrap;
 }
 
+.photon-crash-notice {
+    position: fixed;
+    z-index: 6;
+    top: calc(var(--photon-titlebar-height) + 76px);
+    left: 50%;
+    max-width: calc(100vw - 32px);
+    padding: 10px 16px;
+    transform: translateX(-50%);
+    border: 1px solid var(--photon-color-border);
+    border-radius: 999px;
+    background: var(--photon-color-surface-raised);
+    box-shadow: 0 4px 16px rgb(0 0 0 / 20%);
+    color: var(--photon-color-text-primary);
+    font-size: 13px;
+    pointer-events: none;
+}
+
 .photon-shell[data-dim-overlays="true"] .photon-overlay-scrim {
     background: var(--photon-color-scrim);
 }
@@ -350,6 +367,15 @@ button {
     display: none;
 }
 
+.photon-motion-tab {
+    display: flex;
+    min-width: 0;
+    max-width: var(--photon-tab-max-width);
+    height: var(--photon-tab-height);
+    flex: 0 1 auto;
+    overflow: hidden;
+}
+
 .photon-tab-tooltip-trigger {
     display: flex;
     min-width: 0;
@@ -369,29 +395,21 @@ button {
     gap: var(--photon-space-1);
     overflow: visible;
     border-radius: var(--photon-radius-control);
-    transition:
-        background-color var(--photon-motion-fast) var(--photon-ease-standard),
-        scale var(--photon-motion-fast) var(--photon-ease-standard);
 }
 
-.photon-tab-entering {
-    animation: photon-tab-expand 180ms cubic-bezier(0.2, 0, 0, 1) both;
-}
-
-@keyframes photon-tab-expand {
-    from {
-        flex-basis: 0;
-        flex-grow: 0;
-    }
-
-    to {
-        flex-basis: var(--photon-tab-default-width);
-        flex-grow: 0;
-    }
+.photon-motion-tab > .photon-tab-tooltip-trigger,
+.photon-motion-tab .photon-tab-entry {
+    width: 100%;
+    max-width: none;
+    flex: 1 1 auto;
 }
 
 .photon-tab-tooltip {
     display: flex;
+    position: absolute;
+    z-index: 50;
+    top: calc(100% + var(--photon-space-2));
+    left: 0;
     width: max-content;
     max-width: min(320px, calc(100vw - var(--photon-space-8)));
     flex-direction: column;
@@ -445,7 +463,6 @@ button {
     color: var(--photon-color-text-secondary);
     cursor: pointer;
     text-align: start;
-    transition: color var(--photon-motion-fast) var(--photon-ease-standard);
 }
 
 .photon-tab:focus-visible {
@@ -478,11 +495,7 @@ button {
     display: block;
     width: var(--photon-icon-size-sm);
     height: var(--photon-icon-size-sm);
-    border-radius: var(--photon-radius-icon);
     object-fit: contain;
-    /* Favicons are authored for light backgrounds (e.g. chatgpt.com's black
-       mark). Keep a light tile so dark marks stay visible on dark chrome. */
-    background-color: #ffffff;
 }
 
 .photon-tab-title {
@@ -586,9 +599,6 @@ button {
     border-radius: var(--photon-radius-nested);
     opacity: 0;
     transform: translateY(-50%);
-    transition:
-        opacity var(--photon-motion-fast) var(--photon-ease-standard),
-        scale var(--photon-motion-fast) var(--photon-ease-standard);
 }
 
 .photon-tab-entry[data-active="true"] .photon-tab-close,

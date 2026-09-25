@@ -14,6 +14,7 @@ interface ToolbarProps {
     siteInfoOpen: boolean;
     onMenuOpenChange(open: boolean, notifyNative?: boolean): void;
     onSiteInfoOpenChange(open: boolean, notifyNative?: boolean): void;
+    onAddressFocus(tabId: string): void;
 }
 
 export function Toolbar({
@@ -24,6 +25,7 @@ export function Toolbar({
     siteInfoOpen,
     onMenuOpenChange,
     onSiteInfoOpenChange,
+    onAddressFocus,
 }: ToolbarProps): React.JSX.Element {
     return (
         <div aria-label="Browser controls" className="photon-toolbar" role="toolbar">
@@ -31,6 +33,7 @@ export function Toolbar({
             <Omnibox
                 api={api}
                 inputRef={addressInput}
+                onAddressFocus={onAddressFocus}
                 onSiteInfoOpenChange={onSiteInfoOpenChange}
                 siteInfoOpen={siteInfoOpen}
                 snapshot={snapshot}

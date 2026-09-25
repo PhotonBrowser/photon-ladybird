@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { Globe, LoaderCircle, Minus, Plus, Square, X } from "lucide-react";
-import { Tooltip } from "@heroui/react";
 import { memo, useEffect, useRef, useState } from "react";
 
 import photonLogoMonotone from "../../assets/photon-logo-monotone.svg";
 import type { BrowserTab, PhotonApi } from "../../types";
 import { IconButton } from "../../ui/IconButton";
+import { AnimatePresence, Motion } from "../../ui/Motion";
 
 interface TabStripProps {
     api: PhotonApi;
@@ -15,84 +15,25 @@ interface TabStripProps {
 
 export function TabStrip({ api, tabs, activeTabId }: TabStripProps): React.JSX.Element {
     const draggedTabId = useRef<string | null>(null);
-
-    const reorder = (targetId: string): void => {
-        const draggedId = draggedTabId.current;
-        draggedTabId.current = null;
-        if (!draggedId || draggedId === targetId) return;
-
-        const next = [...tabs];
-        const fromIndex = next.findIndex((tab) => tab.id === draggedId);
-        const toIndex = next.findIndex((tab) => tab.id === targetId);
-        if (fromIndex < 0 || toIndex < 0) return;
-        const [moved] = next.splice(fromIndex, 1);
-        if (!moved) return;
-        next.splice(toIndex, 0, moved);
-        api.tabs.reorder(next.map((tab) => tab.id));
-    };
+    const tabsRef = useRef(tabs);
+    tabsRef.current = tabs;
 
     return (
         <div className="photon-tab-strip">
             <div aria-label="Open tabs" className="photon-tabs" role="tablist">
-                {tabs.map((tab) => {
-                    const active = tab.id === activeTabId;
-                    return (
-                        <TabTooltip key={tab.id} tab={tab}>
-                            <div
-                                className="photon-tab-entry"
-                                data-active={active}
-                                data-tab-id={tab.id}
-                                role="presentation"
-                            >
-                                <button
-                                    aria-selected={active}
-                                    aria-busy={tab.loading}
-                                    className={active ? "photon-tab photon-tab-active" : "photon-tab"}
-                                    role="tab"
-                                    tabIndex={active ? 0 : -1}
-                                    draggable
-                                    type="button"
-                                    onClick={() => api.tabs.select(tab.id)}
-                                    onKeyDown={(event) => focusAdjacentTab(event, api)}
-                                    onDragStart={(event) => {
-                                        draggedTabId.current = tab.id;
-                                        event.dataTransfer.effectAllowed = "move";
-                                    }}
-                                    onDragOver={(event) => event.preventDefault()}
-                                    onDrop={(event) => {
-                                        event.preventDefault();
-                                        reorder(tab.id);
-                                    }}
-                                    onDragEnd={() => {
-                                        draggedTabId.current = null;
-                                    }}
-                                >
-                                    <span className="photon-tab-icon" aria-hidden="true">
-                                        {tab.internalPage ? (
-                                            <img alt="" className="photon-tab-logo" src={photonLogoMonotone} />
-                                        ) : (
-                                            <WebTabIcon
-                                                loading={tab.loading}
-                                                faviconUrl={tab.faviconUrl}
-                                                key={`${tab.id}:${tab.faviconUrl ?? ""}`}
-                                            />
-                                        )}
-                                    </span>
-                                    <span className="photon-tab-title">{tab.title || "New Tab"}</span>
-                                </button>
-                                <IconButton
-                                    ariaLabel={`Close ${tab.title || "tab"}`}
-                                    className="photon-tab-close"
-                                    size="sm"
-                                    variant="ghost"
-                                    onPress={() => api.tabs.close(tab.id)}
-                                >
-                                    <X aria-hidden="true" />
-                                </IconButton>
-                            </div>
-                        </TabTooltip>
-                    );
-                })}
+                <AnimatePresence initial={false}>
+                    {tabs.map((tab) => (
+                        <Motion key={tab.id} className="photon-motion-tab" layout preset="tab">
+                            <TabEntry
+                                active={tab.id === activeTabId}
+                                api={api}
+                                draggedTabId={draggedTabId}
+                                tab={tab}
+                                tabsRef={tabsRef}
+                            />
+                        </Motion>
+                    ))}
+                </AnimatePresence>
             </div>
             <IconButton
                 ariaLabel="New tab"
@@ -138,6 +79,87 @@ export function TabStrip({ api, tabs, activeTabId }: TabStripProps): React.JSX.E
     );
 }
 
+const TabEntry = memo(function TabEntry({
+    active,
+    api,
+    draggedTabId,
+    tab,
+    tabsRef,
+}: {
+    active: boolean;
+    api: PhotonApi;
+    draggedTabId: { current: string | null };
+    tab: BrowserTab;
+    tabsRef: { current: BrowserTab[] };
+}): React.JSX.Element {
+    const reorder = (): void => {
+        const draggedId = draggedTabId.current;
+        draggedTabId.current = null;
+        if (!draggedId || draggedId === tab.id) return;
+
+        const next = [...tabsRef.current];
+        const fromIndex = next.findIndex((candidate) => candidate.id === draggedId);
+        const toIndex = next.findIndex((candidate) => candidate.id === tab.id);
+        if (fromIndex < 0 || toIndex < 0) return;
+        const [moved] = next.splice(fromIndex, 1);
+        if (!moved) return;
+        next.splice(toIndex, 0, moved);
+        api.tabs.reorder(next.map((candidate) => candidate.id));
+    };
+
+    return (
+        <TabTooltip tab={tab}>
+            <div className="photon-tab-entry" data-active={active} data-tab-id={tab.id} role="presentation">
+                <button
+                    aria-selected={active}
+                    aria-busy={tab.loading}
+                    className={active ? "photon-tab photon-tab-active" : "photon-tab"}
+                    role="tab"
+                    tabIndex={active ? 0 : -1}
+                    draggable
+                    type="button"
+                    onClick={() => api.tabs.select(tab.id)}
+                    onKeyDown={(event) => focusAdjacentTab(event, api)}
+                    onDragStart={(event) => {
+                        draggedTabId.current = tab.id;
+                        event.dataTransfer.effectAllowed = "move";
+                    }}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={(event) => {
+                        event.preventDefault();
+                        reorder();
+                    }}
+                    onDragEnd={() => {
+                        draggedTabId.current = null;
+                    }}
+                >
+                    <span className="photon-tab-icon" aria-hidden="true">
+                        {tab.internalPage ? (
+                            <img alt="" className="photon-tab-logo" src={photonLogoMonotone} />
+                        ) : (
+                            <WebTabIcon
+                                loading={tab.loading}
+                                faviconUrl={tab.faviconUrl}
+                                key={`${tab.id}:${tab.faviconUrl ?? ""}`}
+                            />
+                        )}
+                    </span>
+                    <span className="photon-tab-title">{tab.title || "New Tab"}</span>
+                </button>
+                <IconButton
+                    ariaLabel={`Close ${tab.title || "tab"}`}
+                    className="photon-tab-close"
+                    size="sm"
+                    variant="ghost"
+                    onPress={() => api.tabs.close(tab.id)}
+                >
+                    <X aria-hidden="true" />
+                </IconButton>
+            </div>
+        </TabTooltip>
+    );
+});
+
 function TabTooltip({ tab, children }: { tab: BrowserTab; children: React.ReactNode }): React.JSX.Element {
     const [open, setOpen] = useState(false);
     const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -160,21 +182,15 @@ function TabTooltip({ tab, children }: { tab: BrowserTab; children: React.ReactN
     };
 
     return (
-        <Tooltip isOpen={open} delay={0}>
-            <Tooltip.Trigger
-                className="photon-tab-tooltip-trigger"
-                onPointerEnter={startDelay}
-                onPointerLeave={cancelDelay}
-                onFocus={startDelay}
-                onBlur={cancelDelay}
-            >
-                {children}
-            </Tooltip.Trigger>
-            <Tooltip.Content className="photon-tab-tooltip">
-                <span className="photon-tab-hover-title">{tab.title || "New Tab"}</span>
-                <span className="photon-tab-hover-site">{tabSite(tab.url, tab.internalPage)}</span>
-            </Tooltip.Content>
-        </Tooltip>
+        <div className="photon-tab-tooltip-trigger" onPointerEnter={startDelay} onPointerLeave={cancelDelay}>
+            {children}
+            {open ? (
+                <div aria-hidden="true" className="photon-tab-tooltip">
+                    <span className="photon-tab-hover-title">{tab.title || "New Tab"}</span>
+                    <span className="photon-tab-hover-site">{tabSite(tab.url, tab.internalPage)}</span>
+                </div>
+            ) : null}
+        </div>
     );
 }
 

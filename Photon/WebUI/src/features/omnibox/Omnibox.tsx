@@ -11,6 +11,7 @@ interface OmniboxProps {
     inputRef: RefObject<HTMLInputElement | null>;
     siteInfoOpen: boolean;
     onSiteInfoOpenChange(open: boolean, notifyNative?: boolean): void;
+    onAddressFocus(tabId: string): void;
 }
 
 export function Omnibox({
@@ -19,6 +20,7 @@ export function Omnibox({
     inputRef,
     siteInfoOpen,
     onSiteInfoOpenChange,
+    onAddressFocus,
 }: OmniboxProps): React.JSX.Element {
     const activeTab = snapshot.tabs.find((tab) => tab.id === snapshot.activeTabId);
     const isInternalPage = Boolean(activeTab?.internalPage);
@@ -69,6 +71,7 @@ export function Omnibox({
                     const address = isInternalPage ? "" : (activeTab?.url ?? "");
                     setDraftAddress(address);
                     setEditingTabId(activeTab?.id ?? null);
+                    if (activeTab) onAddressFocus(activeTab.id);
                     // React applies the controlled value after this event. Select on the
                     // next frame so the selection covers the committed address text.
                     requestAnimationFrame(() => {

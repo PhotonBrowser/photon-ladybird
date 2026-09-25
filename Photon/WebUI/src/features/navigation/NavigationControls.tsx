@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { Tooltip } from "@heroui/react";
-import { ArrowLeft, ArrowRight } from "lucide-react";
-import { LoaderCircle, RotateCw } from "lucide-react";
+import { ArrowLeft, ArrowRight, RotateCw, X } from "lucide-react";
 
 import type { BrowserSnapshot, PhotonApi } from "../../types";
 import { IconButton } from "../../ui/IconButton";
@@ -48,17 +47,13 @@ export function NavigationControls({ api, snapshot }: NavigationControlsProps): 
             <Tooltip>
                 <Tooltip.Trigger>
                     <IconButton
-                        ariaLabel="Reload page"
+                        ariaLabel={tab?.loading ? "Stop loading" : "Reload page"}
                         className="photon-toolbar-button"
                         size="sm"
                         variant="ghost"
                         onPress={() => api.navigation.reload()}
                     >
-                        {tab?.loading ? (
-                            <LoaderCircle aria-hidden="true" className="photon-spinner" />
-                        ) : (
-                            <RotateCw aria-hidden="true" />
-                        )}
+                        {tab?.loading ? <X aria-hidden="true" /> : <RotateCw aria-hidden="true" />}
                     </IconButton>
                 </Tooltip.Trigger>
                 <Tooltip.Content className="photon-control-tooltip">
