@@ -1,6 +1,22 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 @import "../node_modules/@heroui/styles/dist/heroui.min.css";
 
+@font-face {
+    font-family: Inter;
+    font-style: normal;
+    font-weight: 100 900;
+    font-display: swap;
+    src: url("../../Resources/Fonts/Inter/Inter-VariableFont_opsz,wght.ttf") format("truetype");
+}
+
+@font-face {
+    font-family: Inter;
+    font-style: italic;
+    font-weight: 100 900;
+    font-display: swap;
+    src: url("../../Resources/Fonts/Inter/Inter-Italic-VariableFont_opsz,wght.ttf") format("truetype");
+}
+
 :root {
     --tooltip-delay: 500ms;
     color-scheme: light;
