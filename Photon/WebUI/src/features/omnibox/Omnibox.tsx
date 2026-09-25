@@ -69,9 +69,21 @@ export function Omnibox({
                     const address = isInternalPage ? "" : (activeTab?.url ?? "");
                     setDraftAddress(address);
                     setEditingTabId(activeTab?.id ?? null);
-                    if (address) event.currentTarget.select();
+                    // React applies the controlled value after this event. Select on the
+                    // next frame so the selection covers the committed address text.
+                    requestAnimationFrame(() => {
+                        if (document.activeElement === event.currentTarget) event.currentTarget.select();
+                    });
                 }}
                 onKeyDown={handleKeyDown}
+                onMouseDown={(event) => {
+                    const input = event.currentTarget;
+                    if (document.activeElement !== input) {
+                        requestAnimationFrame(() => {
+                            if (document.activeElement === input) input.select();
+                        });
+                    }
+                }}
             />
         </form>
     );

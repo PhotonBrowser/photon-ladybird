@@ -110,8 +110,13 @@ export default function App({ api }: AppProps): React.JSX.Element {
             addressInput.current?.focus();
             addressInput.current?.select();
         };
+        const blurAddressBar = (): void => addressInput.current?.blur();
         window.addEventListener("photon-ui-focus-address", focusAddressBar);
-        return () => window.removeEventListener("photon-ui-focus-address", focusAddressBar);
+        window.addEventListener("photon-ui-blur-address", blurAddressBar);
+        return () => {
+            window.removeEventListener("photon-ui-focus-address", focusAddressBar);
+            window.removeEventListener("photon-ui-blur-address", blurAddressBar);
+        };
     }, [activeOverlay, api]);
 
     return (

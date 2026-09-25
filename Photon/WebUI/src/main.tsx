@@ -107,6 +107,8 @@ commandTransport.subscribe((event) => {
         window.dispatchEvent(new Event("photon-ui-page-tooltip-clear"));
     } else if (event.type === "focus-address") {
         window.dispatchEvent(new Event("photon-ui-focus-address"));
+    } else if (event.type === "blur-address") {
+        window.dispatchEvent(new Event("photon-ui-blur-address"));
     }
 });
 

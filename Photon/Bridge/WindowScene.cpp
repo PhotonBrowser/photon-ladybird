@@ -342,6 +342,8 @@ bool WindowScene::eventFilter(QObject* watched, QEvent* event)
 
         auto* mouse = dynamic_cast<QMouseEvent*>(event);
         auto scene_position = mouse ? m_active_page_view->mapTo(this, mouse->position().toPoint()) : QPoint { -1, -1 };
+        if (mouse && event->type() == QEvent::MouseButtonPress && page_contains(scene_position) && !has_open_overlays())
+            m_chrome->blur_address_bar();
         auto is_titlebar_double_click = mouse && event->type() == QEvent::MouseButtonDblClick
             && mouse->button() == Qt::LeftButton && scene_position.y() >= 0 && scene_position.y() < 36;
 
@@ -383,8 +385,10 @@ bool WindowScene::eventFilter(QObject* watched, QEvent* event)
         m_pointer_over_page = !chrome_owns_point(point);
         update_page_cursor();
         if (m_pointer_over_page) {
-            if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonDblClick)
+            if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonDblClick) {
+                m_chrome->blur_address_bar();
                 m_active_page_view->setFocus(Qt::MouseFocusReason);
+            }
             forward_mouse_event(event);
             return true;
         }

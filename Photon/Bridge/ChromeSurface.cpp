@@ -159,6 +159,13 @@ void ChromeSurface::focus_address_bar()
         dbgln("Unable to send focus-address event through trusted messaging: {}", result.error());
 }
 
+void ChromeSurface::blur_address_bar()
+{
+    auto result = m_view->send_trusted_embedder_message({ "blur-address"_string, AK::JsonValue { } });
+    if (result.is_error())
+        dbgln("Unable to send blur-address event through trusted messaging: {}", result.error());
+}
+
 bool ChromeSurface::handle_navigation_request(URL::URL const& url)
 {
     // WebView::load_html() uses about:srcdoc internally. Permit exactly the

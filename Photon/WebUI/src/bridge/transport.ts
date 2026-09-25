@@ -32,7 +32,8 @@ export type PhotonTransportEvent =
     | { type: "state"; detail: unknown }
     | { type: "page-tooltip"; detail: { text: string; x: number; y: number } }
     | { type: "page-tooltip-clear" }
-    | { type: "focus-address" };
+    | { type: "focus-address" }
+    | { type: "blur-address" };
 
 /** Dispatch Photon commands only through the trusted native messaging channel. */
 export function createPhotonCommandTransport(): PhotonCommandTransport {
@@ -106,6 +107,8 @@ export function createPhotonCommandTransport(): PhotonCommandTransport {
                             currentListener({ type: "state", detail: message.payload });
                     } else if (message.type === "focus-address") {
                         for (const currentListener of listeners) currentListener({ type: "focus-address" });
+                    } else if (message.type === "blur-address") {
+                        for (const currentListener of listeners) currentListener({ type: "blur-address" });
                     }
                 }
             };

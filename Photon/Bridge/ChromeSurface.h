@@ -41,6 +41,7 @@ public:
     void update_page_tooltip(QString const& text, QPoint position);
     void clear_page_tooltip();
     void focus_address_bar();
+    void blur_address_bar();
 
     Function<void(PhotonCommand const&)> on_command;
 
