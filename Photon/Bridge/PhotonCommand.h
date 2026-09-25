@@ -48,6 +48,9 @@ struct SetForceDarkPagesCommand {
 struct SetDimOverlaysCommand {
     bool enabled;
 };
+struct SetWindowTintOpacityCommand {
+    uint8_t opacity;
+};
 
 enum class OverlayRegion {
     BrowserMenu,
@@ -85,6 +88,7 @@ using PhotonCommand = std::variant<
     SetThemeCommand,
     SetForceDarkPagesCommand,
     SetDimOverlaysCommand,
+    SetWindowTintOpacityCommand,
     SetOverlayCaptureCommand,
     WindowControlCommand>;
 

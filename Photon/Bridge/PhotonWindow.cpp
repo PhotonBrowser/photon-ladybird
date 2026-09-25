@@ -288,6 +288,8 @@ void Window::dispatch_command(PhotonCommand const& command)
             m_browser->set_force_dark_pages(typed_command.enabled);
         else if constexpr (std::is_same_v<Command, SetDimOverlaysCommand>)
             m_browser->set_dim_overlays(typed_command.enabled);
+        else if constexpr (std::is_same_v<Command, SetWindowTintOpacityCommand>)
+            m_browser->set_window_tint_opacity(typed_command.opacity);
         else if constexpr (std::is_same_v<Command, SetOverlayCaptureCommand>)
             m_scene->set_overlay_open(typed_command.open);
         else if constexpr (std::is_same_v<Command, WindowControlCommand>) {

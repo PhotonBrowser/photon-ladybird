@@ -331,6 +331,11 @@ void BrowserView::set_dim_overlays(bool enabled)
     apply_app_effects(dispatch_app_command(m_state, PhotonAppCommandKind_SetDimOverlays, enabled));
 }
 
+void BrowserView::set_window_tint_opacity(uint8_t opacity)
+{
+    apply_app_effects(dispatch_app_command(m_state, PhotonAppCommandKind_SetWindowTintOpacity, opacity));
+}
+
 void BrowserView::apply_app_effects(PhotonAppEffects const& effects)
 {
     if (!effects.accepted)

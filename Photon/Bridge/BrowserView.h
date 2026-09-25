@@ -67,6 +67,7 @@ public:
     void set_theme_mode(ThemeMode mode);
     void set_force_dark_pages(bool enabled);
     void set_dim_overlays(bool enabled);
+    void set_window_tint_opacity(uint8_t opacity);
     void load_initial_url();
 
 signals:

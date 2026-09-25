@@ -11,6 +11,7 @@
 #include <QJsonObject>
 
 #include <algorithm>
+#include <cmath>
 
 namespace Photon {
 
@@ -120,6 +121,16 @@ std::optional<PhotonCommand> PhotonCommandTransport::decode_message(QString cons
         if (type == QStringLiteral("set-force-dark-pages"))
             return SetForceDarkPagesCommand { value.toBool() };
         return SetDimOverlaysCommand { value.toBool() };
+    }
+
+    if (type == QStringLiteral("set-window-tint-opacity") && has_exact_fields({ u"opacity" })) {
+        auto const value = object.value(QStringLiteral("opacity"));
+        if (!value.isDouble())
+            return { };
+        auto opacity = value.toDouble(-1);
+        if (opacity < 0 || opacity > 100 || opacity != std::floor(opacity))
+            return { };
+        return SetWindowTintOpacityCommand { static_cast<uint8_t>(opacity) };
     }
 
     if (type == QStringLiteral("capture") && has_exact_fields({ u"region", u"open" })) {
