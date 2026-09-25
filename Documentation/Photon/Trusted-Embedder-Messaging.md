@@ -3,12 +3,12 @@
 ## Implemented architecture
 
 Photon enables trusted messaging only on its chrome view. Bundled chrome arms
-the capability for the next `load_html` call; integrated development arms it
-for one explicitly supplied Vite URL. Both grants are attached to the matching
-committed top-level document and identified by a monotonically increasing generation.
-The binding validates the calling document at send time. Replacing the active
-document disconnects the channel and drops queued events. Ordinary views and
-unrelated documents receive no binding.
+the capability before its `load_html` call; integrated development arms it for
+one explicitly supplied Vite URL. Initial grants are attached to the matching
+committed top-level document and identified by a monotonically increasing
+generation. A reload of that exact document can reauthorize only while its old
+channel is still connected; navigation to another URL revokes the grant. Each
+replacement document receives a new connection and binding.
 
 ```text
 React / TypeScript
@@ -22,8 +22,9 @@ Photon typed decoder → PhotonApp (Rust) → AppEffects → C++ executor
 
 Native state/focus events return over the same channel to TypeScript
 subscribers. The public React API and Rust command/effect model are unchanged.
-The temporary `photon-command://` command transport has been removed; a missing
-trusted binding drops commands and reports a one-time console diagnostic.
+The temporary `photon-command://` command transport has been removed. React
+waits for the native binding-installed event before publishing `window.photon`
+or rendering the command API.
 
 ## Original limitation (resolved)
 
@@ -334,17 +335,20 @@ allowlist.
 
 Native event payloads remain structured `JsonValue` values in the document
 connection. A data-free `TrustedEmbedderMessageAvailable` DOM event wakes
-Photon's existing transport, which calls `receiveMessages()` to pull the
+Photon’s existing transport, which calls `receiveMessages()` to pull the
 queued `{ type, payload }` records and convert them into the existing typed
 `PhotonTransportEvent` subscription API. Queue contents are never transferred
 to a later document: if the authorized document or channel is gone, they are
-dropped. A new document gets a fresh channel only after explicit authorization.
+dropped. `TrustedEmbedderMessagingReady` fires only after the binding is
+installed. React waits for it before initialization, then sends `ui-ready`;
+Photon sends the current state snapshot after that handshake.
 
 ## Implemented file set
 
 Ladybird changes are represented by registered Photon patches: patch 0010
-adds the generic channel, and patch 0011 adds exact-URL authorization for the
-integrated Vite development document.
+adds the generic channel, patch 0011 adds exact-URL authorization for the
+integrated Vite development document, and patches 0012–0015 stabilize its
+readiness and reload lifecycle.
 
 | Files | Responsibility |
 | --- | --- |
@@ -396,8 +400,9 @@ The React public API, `PhotonCommand`, Rust `PhotonApp`, `AppCommand`,
 transport implementation and its native typed decoder change. A standalone
 Vite page remains unprivileged. Integrated development mode is explicitly
 authorized by ChromeSurface for the exact initial loopback URL and committed
-document; the origin alone and later replacement documents do not grant the
-capability.
+document. A same-URL reload is reauthorized only from an active trusted
+document, after its old channel is revoked. Another URL, another view, or an
+unrelated localhost document receives no capability.
 
 ## Security properties and threat model
 
@@ -406,7 +411,7 @@ capability.
 | Malicious ordinary webpage | No opt-in means no binding or endpoint. | Ensure only the separate chrome view arms it. |
 | Malicious child frame | No binding installed in child; incumbent caller-document check rejects invocation through `parent`/`top`. | Keep chrome content and CSP narrow; do not treat same-origin as authorization. |
 | Same-origin child frame | Same caller check; top-level object possession is insufficient. | Keep the direct `top` invocation rejection covered in runtime security checks. |
-| Navigation away/full replacement | Old document connection is revoked on active-document change; authorization is not copied to the new document. | ChromeSurface may still cancel unexpected top-level chrome navigation. |
+| Navigation away/full replacement | Old channel is revoked at navigation start and the old document loses its binding on disconnect. Only a reload to the exact configured URL from the currently connected trusted document can reauthorize. | ChromeSurface cancels unexpected top-level chrome navigation. |
 | Same-document navigation | Same document, same channel; no new capability is granted. | Validate commands as usual. |
 | Compromised React/frontend | It can send arbitrary bytes within the bounded channel. | Native decoder validates type, fields, lengths, enums, IDs, and command allowlist; React compromise is not a trust boundary. |
 | Malformed or oversized message | Binding and IPC decoder reject malformed/over-limit data; invalid JSON values never reach host callback. | Validate every Photon command argument and fail closed. |
