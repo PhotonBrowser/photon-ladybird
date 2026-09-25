@@ -34,22 +34,23 @@ export type PhotonTransportEvent =
     | { type: "focus-address" };
 
 /** Dispatch Photon commands only through the trusted native messaging channel. */
-export function createPhotonCommandTransport(enabled: boolean): PhotonCommandTransport {
+export function createPhotonCommandTransport(): PhotonCommandTransport {
     const listeners = new Set<(event: PhotonTransportEvent) => void>();
+    let missingBridgeReported = false;
     return {
         dispatch(command) {
-            if (!enabled) {
-                throw new Error("Photon native bridge is unavailable; privileged commands cannot be dispatched.");
-            }
             const nativeChannel = window.embedderMessaging;
             if (!nativeChannel) {
-                throw new Error("Photon trusted messaging channel is unavailable.");
+                if (!missingBridgeReported) {
+                    console.error("Photon command was not sent: the trusted native messaging channel is unavailable.");
+                    missingBridgeReported = true;
+                }
+                return;
             }
             const { type, payload } = serializeNativeCommand(command);
             nativeChannel.postMessage(type, payload);
         },
         subscribe(listener) {
-            if (!enabled) return () => {};
             listeners.add(listener);
             const onNativeMessage = (): void => {
                 const channel = window.embedderMessaging;

@@ -1,0 +1,698 @@
+--- a/Libraries/LibWebView/ViewImplementation.cpp
++++ b/Libraries/LibWebView/ViewImplementation.cpp
+@@ -73,7 +73,7 @@
+ {
+     if (auto view = all_views().get(id); view.has_value())
+         return *view.value();
+-    return {};
++    return { };
+ }
+ 
+ ViewImplementation::ViewImplementation(IsPrivate is_private)
+@@ -83,7 +83,7 @@
+     , m_view_id(s_view_count++)
+ {
+     all_views().set(m_view_id, this);
+-    m_top_level_traversable.set_view({}, *this);
++    m_top_level_traversable.set_view({ }, *this);
+ 
+     initialize_context_menus();
+ 
+@@ -330,7 +330,7 @@
+     if (did_swap_bitmap)
+         did_accept_presented_backing_store(bitmap_id, damage_rect);
+     if (did_swap_bitmap && m_crash_state.has_value() && m_crash_state->recovery_started && !m_top_level_traversable.has_pending_host())
+-        set_crash_state({});
++        set_crash_state({ });
+     if (did_swap_bitmap)
+         TabPerformanceMonitor::did_present(view_id());
+ 
+@@ -375,15 +375,21 @@
+ {
+     if (!m_client_state.page)
+         return;
+-    m_top_level_traversable.set_has_system_focus(has_system_focus, {});
++    m_top_level_traversable.set_has_system_focus(has_system_focus, { });
+ }
+ 
+ void ViewImplementation::load(URL::URL const& url, Web::Bindings::NavigationHistoryBehavior history_handling)
+ {
++    auto trusted_embedder_messaging_authorized_for_navigation = m_trusted_embedder_messaging_armed
++        && m_trusted_embedder_messaging_expected_navigation_url.has_value()
++        && *m_trusted_embedder_messaging_expected_navigation_url == url;
++
+     if (m_trusted_embedder_messaging_armed || m_trusted_embedder_messaging_navigation_id.has_value()) {
+         m_trusted_embedder_messaging_armed = false;
+         m_trusted_embedder_messaging_navigation_id.clear();
+-        m_trusted_embedder_message_callback = { };
++        m_trusted_embedder_messaging_expected_navigation_url.clear();
++        if (!trusted_embedder_messaging_authorized_for_navigation)
++            m_trusted_embedder_message_callback = { };
+     }
+ 
+     if (on_before_browser_initiated_navigation)
+@@ -392,6 +398,8 @@
+     prepare_for_navigation_after_crash(url);
+     set_loading_state(true);
+     auto navigation_id = generate_navigation_id();
++    if (trusted_embedder_messaging_authorized_for_navigation)
++        m_trusted_embedder_messaging_navigation_id = navigation_id;
+     m_top_level_traversable.set_ongoing_navigation(CanonicalNavigable::OngoingNavigation {
+         .url = url,
+         .navigation_id = navigation_id,
+@@ -482,12 +490,13 @@
+     set_loading_state(true);
+     auto navigation_id = generate_navigation_id();
+     m_trusted_embedder_messaging_channel = nullptr;
+-    m_trusted_embedder_messaging_navigation_id = m_trusted_embedder_messaging_armed
++    m_trusted_embedder_messaging_navigation_id = m_trusted_embedder_messaging_armed && !m_trusted_embedder_messaging_expected_navigation_url.has_value()
+         ? Optional<Utf16String> { navigation_id }
+         : Optional<Utf16String> { };
+-    if (!m_trusted_embedder_messaging_armed)
++    if (!m_trusted_embedder_messaging_armed || m_trusted_embedder_messaging_expected_navigation_url.has_value())
+         m_trusted_embedder_message_callback = { };
+     m_trusted_embedder_messaging_armed = false;
++    m_trusted_embedder_messaging_expected_navigation_url.clear();
+     m_top_level_traversable.set_ongoing_navigation(CanonicalNavigable::OngoingNavigation {
+         .url = URL::about_srcdoc(),
+         .navigation_id = navigation_id,
+@@ -508,6 +517,24 @@
+     m_trusted_embedder_messaging_limits.maximum_serialized_message_size = min(limits.maximum_serialized_message_size, 64 * 1024);
+     m_trusted_embedder_messaging_limits.maximum_type_size = min(limits.maximum_type_size, 128);
+     m_trusted_embedder_messaging_armed = true;
++    m_trusted_embedder_messaging_expected_navigation_url.clear();
++    m_trusted_embedder_messaging_navigation_id.clear();
++    return { };
++}
++
++ErrorOr<void> ViewImplementation::enable_trusted_embedder_messaging_for_next_navigation(
++    URL::URL const& expected_url, TrustedEmbedderMessageCallback callback, TrustedEmbedderMessagingLimits limits)
++{
++    if (!callback)
++        return Error::from_string_literal("Trusted embedder messaging requires an inbound callback");
++    if (m_trusted_embedder_messaging_armed)
++        return Error::from_string_literal("Trusted embedder messaging is already armed for a load");
++
++    m_trusted_embedder_message_callback = move(callback);
++    m_trusted_embedder_messaging_limits.maximum_serialized_message_size = min(limits.maximum_serialized_message_size, 64 * 1024);
++    m_trusted_embedder_messaging_limits.maximum_type_size = min(limits.maximum_type_size, 128);
++    m_trusted_embedder_messaging_armed = true;
++    m_trusted_embedder_messaging_expected_navigation_url = expected_url;
+     m_trusted_embedder_messaging_navigation_id.clear();
+     return { };
+ }
+@@ -523,6 +550,7 @@
+ {
+     m_trusted_embedder_messaging_armed = false;
+     m_trusted_embedder_messaging_navigation_id.clear();
++    m_trusted_embedder_messaging_expected_navigation_url.clear();
+     m_trusted_embedder_message_callback = { };
+     m_trusted_embedder_messaging_channel = nullptr;
+ }
+@@ -606,7 +634,7 @@
+     if (m_top_level_traversable.ongoing_navigation().has_value())
+         m_last_stopped_load_url = m_top_level_traversable.ongoing_navigation()->url;
+     else
+-        m_last_stopped_load_url = {};
++        m_last_stopped_load_url = { };
+     if (cancel_uncommitted_top_level_navigation("stop-loading"sv, true))
+         return;
+     set_loading_state(false);
+@@ -704,7 +732,7 @@
+ 
+     auto current_used_step_index = m_top_level_traversable.session_history().current_used_step_index();
+     if (!current_used_step_index.has_value())
+-        return {};
++        return { };
+ 
+     Vector<SessionHistoryTraversalMenuItem> items;
+     auto append_item = [&](i32 target_step, TraversableSessionHistory::Entry const& target_entry) {
+@@ -717,7 +745,7 @@
+             target_step,
+             move(title),
+             move(url),
+-            history_entry.has_value() ? move(history_entry->favicon_png) : OptionalNone {},
++            history_entry.has_value() ? move(history_entry->favicon_png) : OptionalNone { },
+         });
+     };
+ 
+@@ -818,7 +846,7 @@
+                 if (m_debugger_overlay_pointer_state.is_active() && (mouse_event->buttons & Compositing::MouseButton::Primary) == Compositing::MouseButton::None)
+                     m_debugger_overlay_pointer_state.cancel();
+             } else if (mouse_event->type == Compositing::MouseEvent::Type::MouseLeave) {
+-                set_debugger_overlay_hovered_action({});
++                set_debugger_overlay_hovered_action({ });
+                 m_debugger_overlay_pointer_state.cancel();
+             }
+ 
+@@ -1136,7 +1164,7 @@
+             if (on_finish_handling_drag_event)
+                 on_finish_handling_drag_event(event);
+         },
+-        [](auto const&) {});
++        [](auto const&) { });
+ }
+ 
+ void ViewImplementation::did_forward_input_event(Badge<WebContentPage>, u64 event_id, WebContentPage& endpoint)
+@@ -1298,11 +1326,11 @@
+ {
+     auto domain = HTTP::Cookie::canonicalize_domain(url);
+     if (!domain.has_value())
+-        return {};
++        return { };
+ 
+     auto document_index = m_document_cookie_version_indices.get(*domain);
+     if (!document_index.has_value())
+-        return {};
++        return { };
+ 
+     return Core::get_shared_version(m_document_cookie_version_buffer, *document_index);
+ }
+@@ -1348,7 +1376,7 @@
+     return selected_text()->map<Optional<String>>([](auto& selection) -> Optional<String> {
+         auto collapsed_selection = MUST(Web::Infra::strip_and_collapse_whitespace(selection));
+         if (collapsed_selection.is_empty())
+-            return {};
++            return { };
+         return collapsed_selection;
+     });
+ }
+@@ -1363,11 +1391,11 @@
+ 
+     return promise->map<Optional<DictionaryLookup>>([](auto& lookup) -> Optional<DictionaryLookup> {
+         if (!lookup.has_value())
+-            return {};
++            return { };
+ 
+         auto collapsed_selection = MUST(Web::Infra::strip_and_collapse_whitespace(lookup->text));
+         if (collapsed_selection.is_empty())
+-            return {};
++            return { };
+ 
+         auto result = lookup;
+         result->text = move(collapsed_selection);
+@@ -1564,7 +1592,7 @@
+     if (m_on_node_picker_event) {
+         m_on_node_picker_event({
+             .type = DevTools::DevToolsDelegate::NodePickerEvent::Type::Canceled,
+-            .node_id = {},
++            .node_id = { },
+         });
+     }
+ }
+@@ -1654,7 +1682,7 @@
+     if (names.has_value())
+         client().async_inspect_indexed_database_objects(page_id(), request_id, host, JsonValue { names.release_value() }, JsonValue { move(options) });
+     else
+-        client().async_inspect_indexed_database_objects(page_id(), request_id, host, JsonValue {}, JsonValue { move(options) });
++        client().async_inspect_indexed_database_objects(page_id(), request_id, host, JsonValue { }, JsonValue { move(options) });
+ }
+ 
+ void ViewImplementation::delete_indexed_database(String const& host, String const& name, DevTools::DevToolsDelegate::OnIndexedDBInspectionComplete on_complete)
+@@ -1740,7 +1768,7 @@
+ static void fail_pending_debugger_request_map(HashMap<u64, Callback>& requests, HashTable<u64>* cancelled_requests, ErrorFactory make_error)
+ {
+     auto requests_to_fail = move(requests);
+-    requests = {};
++    requests = { };
+ 
+     for (auto& request : requests_to_fail) {
+         if (cancelled_requests)
+@@ -1848,7 +1876,7 @@
+         return;
+     }
+ 
+-    (*callback)({});
++    (*callback)({ });
+ }
+ 
+ void ViewImplementation::retrieve_debugger_environments(u64 frame_id, DevTools::DevToolsDelegate::OnDebuggerEnvironmentsReceived on_complete)
+@@ -1898,7 +1926,7 @@
+ 
+ void ViewImplementation::clear_highlighted_dom_node()
+ {
+-    highlight_dom_node(0, {});
++    highlight_dom_node(0, { });
+ }
+ 
+ void ViewImplementation::highlight_flexbox(Compositing::UniqueNodeID node_id, JsonValue options)
+@@ -2082,7 +2110,7 @@
+ void ViewImplementation::did_request_color_picker(Badge<WebContentPage>, WebContentPage& requesting_page, Color current_color)
+ {
+     if (another_page_awaits(m_color_picker_page, requesting_page)) {
+-        requesting_page.async_color_picker_update({}, Web::HTML::ColorPickerUpdateState::Closed);
++        requesting_page.async_color_picker_update({ }, Web::HTML::ColorPickerUpdateState::Closed);
+         return;
+     }
+     m_color_picker_page = requesting_page;
+@@ -2102,7 +2130,7 @@
+ void ViewImplementation::did_request_file_picker(Badge<WebContentPage>, WebContentPage& requesting_page, Web::HTML::FileFilter const& accepted_file_types, Web::HTML::AllowMultipleFiles allow_multiple_files)
+ {
+     if (another_page_awaits(m_file_picker_page, requesting_page)) {
+-        requesting_page.async_file_picker_closed({});
++        requesting_page.async_file_picker_closed({ });
+         return;
+     }
+     m_file_picker_page = requesting_page;
+@@ -2121,7 +2149,7 @@
+ void ViewImplementation::did_request_select_dropdown(Badge<WebContentPage>, WebContentPage& requesting_page, Gfx::IntPoint content_position, i32 minimum_width, Vector<Web::HTML::SelectItem> items)
+ {
+     if (another_page_awaits(m_select_dropdown_page, requesting_page)) {
+-        requesting_page.async_select_dropdown_closed({});
++        requesting_page.async_select_dropdown_closed({ });
+         return;
+     }
+     m_select_dropdown_page = requesting_page;
+@@ -2322,7 +2350,7 @@
+     for (size_t i = 1; i < backing_stores.size(); ++i) {
+         m_client_state.other_bitmaps.append({
+             .id = bitmap_ids[i],
+-            .last_painted_size = {},
++            .last_painted_size = { },
+             .shared_image_buffer = make<Gfx::SharedImageBuffer>(Gfx::SharedImageBuffer::import_from_shared_image(move(backing_stores[i]))),
+         });
+     }
+@@ -2363,7 +2391,7 @@
+     if (m_debugger_paused) {
+         m_debugger_overlay_pointer_state.cancel();
+         if (m_debugger_overlay_hovered_action.has_value())
+-            set_debugger_overlay_hovered_action({});
++            set_debugger_overlay_hovered_action({ });
+         else
+             update_paused_debugger_overlay();
+     }
+@@ -2389,17 +2417,17 @@
+ 
+         // A queued session-history reset awaiting the previous process's reply can never complete.
+         if (auto queue_promise = move(m_pending_session_history_reset_queue_promise))
+-            queue_promise->resolve({});
++            queue_promise->resolve({ });
+ 
+         cancel_all_native_geolocation_requests();
+ 
+         // Only a view's first process creates its traversable. A process replacing another adopts it
+         auto navigable_to_adopt = m_top_level_traversable.session_history().current_entry()
+             ? Optional<Web::HTML::CrossProcessId> { m_top_level_traversable.id() }
+-            : Optional<Web::HTML::CrossProcessId> {};
++            : Optional<Web::HTML::CrossProcessId> { };
+         auto client_handle = m_client_state.client_handle;
+         auto replaces_existing_client = m_client_state.page != nullptr;
+-        m_client_state = {};
++        m_client_state = { };
+         m_client_state.client_handle = move(client_handle);
+ 
+         // FIXME: Fail to open the tab, rather than crashing the whole application if this fails.
+@@ -2441,7 +2469,7 @@
+     if (Application::browser_options().webdriver_browser_endpoint.has_value())
+         Application::the().push_webdriver_session_config(*this);
+ 
+-    Application::the().apply_view_options({}, *this);
++    Application::the().apply_view_options({ }, *this);
+ 
+     languages_changed();
+     content_settings_changed();
+@@ -2483,12 +2511,12 @@
+             if (!Application::settings().geolocation_enabled()) {
+                 if (auto provider_watch_id = view->m_geolocation_watch_ids.take(key); provider_watch_id.has_value())
+                     Application::the().stop_watching_geolocation_position(*provider_watch_id);
+-                request_page->async_geolocation_position_response(request_id, {}, to_underlying(GeolocationErrorCode::PermissionDenied));
++                request_page->async_geolocation_position_response(request_id, { }, to_underlying(GeolocationErrorCode::PermissionDenied));
+                 return;
+             }
+ 
+             request_page->async_geolocation_position_response(request_id,
+-                { coords.latitude, coords.longitude, coords.accuracy, coords.altitude, coords.altitude_accuracy, coords.heading, coords.speed }, {});
++                { coords.latitude, coords.longitude, coords.accuracy, coords.altitude, coords.altitude_accuracy, coords.heading, coords.speed }, { });
+         };
+     };
+ 
+@@ -2515,13 +2543,13 @@
+                     Application::the().stop_watching_geolocation_position(*provider_watch_id);
+             }
+ 
+-            request_page->async_geolocation_position_response(request_id, {}, to_underlying(code));
++            request_page->async_geolocation_position_response(request_id, { }, to_underlying(code));
+         };
+     };
+ 
+     on_request_geolocation_position = [this, geolocation_error_code, make_geolocation_success_handler, make_geolocation_error_handler](WebContentPage& requesting_page, u64 request_id) {
+         if (!Application::settings().geolocation_enabled()) {
+-            requesting_page.async_geolocation_position_response(request_id, {}, to_underlying(GeolocationErrorCode::PermissionDenied));
++            requesting_page.async_geolocation_position_response(request_id, { }, to_underlying(GeolocationErrorCode::PermissionDenied));
+             return;
+         }
+ 
+@@ -2532,7 +2560,7 @@
+             make_geolocation_success_handler(requesting_page, request_id, false),
+             make_geolocation_error_handler(requesting_page, request_id, false));
+         if (provider_request_id.is_error()) {
+-            requesting_page.async_geolocation_position_response(request_id, {}, to_underlying(geolocation_error_code(provider_request_id.error())));
++            requesting_page.async_geolocation_position_response(request_id, { }, to_underlying(geolocation_error_code(provider_request_id.error())));
+             return;
+         }
+ 
+@@ -2547,7 +2575,7 @@
+ 
+     on_start_geolocation_position_watch = [this, geolocation_error_code, make_geolocation_success_handler, make_geolocation_error_handler](WebContentPage& requesting_page, u64 request_id) {
+         if (!Application::settings().geolocation_enabled()) {
+-            requesting_page.async_geolocation_position_response(request_id, {}, to_underlying(GeolocationErrorCode::PermissionDenied));
++            requesting_page.async_geolocation_position_response(request_id, { }, to_underlying(GeolocationErrorCode::PermissionDenied));
+             return;
+         }
+ 
+@@ -2559,7 +2587,7 @@
+             make_geolocation_error_handler(requesting_page, request_id, true));
+ 
+         if (provider_watch_id.is_error()) {
+-            requesting_page.async_geolocation_position_response(request_id, {}, to_underlying(geolocation_error_code(provider_watch_id.error())));
++            requesting_page.async_geolocation_position_response(request_id, { }, to_underlying(geolocation_error_code(provider_watch_id.error())));
+             return;
+         }
+ 
+@@ -2595,6 +2623,7 @@
+     if (m_trusted_embedder_messaging_navigation_id.has_value()
+         && (!navigation_id.has_value() || *m_trusted_embedder_messaging_navigation_id != *navigation_id)) {
+         m_trusted_embedder_messaging_navigation_id.clear();
++        m_trusted_embedder_messaging_expected_navigation_url.clear();
+         m_trusted_embedder_message_callback = { };
+     }
+ 
+@@ -2621,6 +2650,7 @@
+ 
+     if (m_trusted_embedder_messaging_navigation_id.has_value()) {
+         m_trusted_embedder_messaging_navigation_id.clear();
++        m_trusted_embedder_messaging_expected_navigation_url.clear();
+         m_trusted_embedder_message_callback = { };
+     }
+ 
+@@ -2784,7 +2814,7 @@
+             continue;
+ 
+         command.page = new_host;
+-        new_host.async_run_webdriver_command(command_id, navigable_id, "wait_for_navigation"_string, JsonValue {}, {});
++        new_host.async_run_webdriver_command(command_id, navigable_id, "wait_for_navigation"_string, JsonValue { }, { });
+     }
+ }
+ 
+@@ -2835,8 +2865,8 @@
+ void ViewImplementation::set_webdriver_current_browsing_context(CanonicalNavigable const& navigable)
+ {
+     if (!navigable.parent()) {
+-        m_webdriver_current_navigable_id = {};
+-        m_webdriver_current_parent_navigable_id = {};
++        m_webdriver_current_navigable_id = { };
++        m_webdriver_current_parent_navigable_id = { };
+         return;
+     }
+ 
+@@ -2857,7 +2887,7 @@
+         // NB: The view is the current top-level browsing context, so it is open.
+ 
+         // 2. Return success with data null.
+-        on_complete(JsonValue {});
++        on_complete(JsonValue { });
+         return;
+     }
+ 
+@@ -2882,7 +2912,7 @@
+         // FIXME: 5. Update any implementation-specific state that would result from the user selecting session's current browsing context for interaction, without altering OS-level focus.
+ 
+         // 6. Return success with data null.
+-        on_complete(JsonValue {});
++        on_complete(JsonValue { });
+     });
+ }
+ 
+@@ -2942,7 +2972,7 @@
+ {
+     // A dormant replacement process cannot have a user prompt belonging to the crashed document.
+     if (m_crash_state.has_value()) {
+-        on_complete(JsonValue {});
++        on_complete(JsonValue { });
+         return;
+     }
+ 
+@@ -2963,7 +2993,7 @@
+         if (view.value->handle() == handle)
+             return *view.value;
+     }
+-    return {};
++    return { };
+ }
+ 
+ void ViewImplementation::load_for_webdriver_navigation(URL::URL const& url)
+@@ -2987,7 +3017,7 @@
+ void ViewImplementation::wait_for_webdriver_navigation_completion(Optional<u64> page_load_timeout, Function<void(Web::WebDriver::Response)> on_complete)
+ {
+     if (!m_webdriver_navigation_observation.has_value()) {
+-        on_complete(JsonValue {});
++        on_complete(JsonValue { });
+         return;
+     }
+ 
+@@ -3047,7 +3077,7 @@
+             auto view = ViewImplementation::find_view_by_id(view_id);
+             if (!view.has_value())
+                 return;
+-            view->complete_webdriver_navigation_completion(request_id, JsonValue {});
++            view->complete_webdriver_navigation_completion(request_id, JsonValue { });
+         });
+     }
+ }
+@@ -3076,7 +3106,7 @@
+     if (auto current_used_step_index = m_top_level_traversable.session_history().current_used_step_index(); current_used_step_index.has_value())
+         serialized.set("currentUsedStepIndex"sv, *current_used_step_index);
+     else
+-        serialized.set("currentUsedStepIndex"sv, JsonValue {});
++        serialized.set("currentUsedStepIndex"sv, JsonValue { });
+ 
+     if (auto traversal = m_top_level_traversable.browser_history_traversal_for_testing(); traversal.has_value()) {
+         JsonObject pending_traversal;
+@@ -3086,7 +3116,7 @@
+         pending_traversal.set("stage"sv, CanonicalTraversable::browser_history_traversal_stage_to_string(traversal->stage));
+         serialized.set("pendingSessionHistoryTraversal"sv, move(pending_traversal));
+     } else {
+-        serialized.set("pendingSessionHistoryTraversal"sv, JsonValue {});
++        serialized.set("pendingSessionHistoryTraversal"sv, JsonValue { });
+     }
+ 
+     serialized.set("entries"sv, history_json_entries(m_top_level_traversable.session_history()));
+@@ -3157,7 +3187,7 @@
+ 
+     auto current_used_step_index = session_history.current_used_step_index();
+     if (!current_used_step_index.has_value())
+-        return {};
++        return { };
+ 
+     return SessionHistorySnapshot {
+         .entries = session_history.entries(),
+@@ -3172,7 +3202,7 @@
+ 
+     reconstruct_current_session_history_entry_with_history_operation("restored-session-history-from-ui-snapshot"sv);
+     update_navigation_action_state();
+-    return {};
++    return { };
+ }
+ 
+ bool ViewImplementation::capture_session_history_snapshot_for_testing(Badge<WebContentPage>)
+@@ -3195,7 +3225,7 @@
+     if (m_session_tab_id.has_value())
+         return true;
+ 
+-    auto tab_id = m_session->session_store->tab_opened({ .window_id = {}, .initial_url = m_url, .insertion_index = {}, .is_active = SessionStore::IsActive::No });
++    auto tab_id = m_session->session_store->tab_opened({ .window_id = { }, .initial_url = m_url, .insertion_index = { }, .is_active = SessionStore::IsActive::No });
+     if (tab_id.is_error())
+         return false;
+     set_session_tab_id(tab_id.value());
+@@ -3206,7 +3236,7 @@
+ static Optional<size_t> current_top_level_history_entry_index_for_step(Vector<Web::HTML::SessionHistoryEntryDescriptor> const& entries, Optional<i32> current_step)
+ {
+     if (!current_step.has_value())
+-        return {};
++        return { };
+ 
+     Optional<size_t> current_entry_index;
+     for (size_t i = 0; i < entries.size(); ++i) {
+@@ -3286,7 +3316,7 @@
+         [](auto const&) { return false; });
+     auto requested_operation_completion = [this, reloads_top_level, finalizes_top_level_cross_document_navigation](Web::HTML::HistoryStepResult result, Optional<i32> committed_step) {
+         if (reloads_top_level && result != Web::HTML::HistoryStepResult::Applied)
+-            did_cancel_navigation({});
++            did_cancel_navigation({ });
+         if (finalizes_top_level_cross_document_navigation && result == Web::HTML::HistoryStepResult::Applied) {
+             if (auto const* current_entry = m_top_level_traversable.session_history().current_entry())
+                 set_url(current_entry->url);
+@@ -3310,9 +3340,9 @@
+     update_navigation_action_state();
+ 
+     if (auto queue_promise = move(m_pending_session_history_reset_queue_promise))
+-        queue_promise->resolve({});
++        queue_promise->resolve({ });
+     if (promise)
+-        promise->resolve({});
++        promise->resolve({ });
+ }
+ 
+ void ViewImplementation::dump_session_history(StringView reason, SessionHistoryDumpMode mode) const
+@@ -3333,7 +3363,7 @@
+         m_url,
+         m_top_level_traversable.has_uncommitted_navigation(),
+         loading_url,
+-        traversal.has_value() ? Optional<i32> { traversal->target_step } : Optional<i32> {},
++        traversal.has_value() ? Optional<i32> { traversal->target_step } : Optional<i32> { },
+         traversal.has_value() ? CanonicalTraversable::browser_history_traversal_stage_to_string(traversal->stage) : "none"sv,
+         m_top_level_traversable.pending_same_document_session_history_entries_for_debug(),
+         m_navigate_back_action->enabled(),
+@@ -3424,7 +3454,7 @@
+     }
+ 
+     for (auto const& command : pending_crash_commands)
+-        Application::the().complete_webdriver_content_command(command.key, JsonValue {});
++        Application::the().complete_webdriver_content_command(command.key, JsonValue { });
+ }
+ 
+ void ViewImplementation::respawn_web_content_process_after_crash()
+@@ -3477,7 +3507,7 @@
+             return MUST(String::from_utf8(state->active_document_url.serialize_path()));
+     }
+ 
+-    return {};
++    return { };
+ }
+ 
+ void ViewImplementation::languages_changed()
+@@ -3520,14 +3550,14 @@
+         for (auto const& request : geolocation_position_request_ids) {
+             Application::the().cancel_geolocation_position_request(request.value);
+             if (request.key.page->is_live())
+-                request.key.page->async_geolocation_position_response(request.key.request_id, {}, to_underlying(ErrorCode::PermissionDenied));
++                request.key.page->async_geolocation_position_response(request.key.request_id, { }, to_underlying(ErrorCode::PermissionDenied));
+         }
+ 
+         auto geolocation_watch_ids = move(m_geolocation_watch_ids);
+         for (auto const& watch : geolocation_watch_ids) {
+             Application::the().stop_watching_geolocation_position(watch.value);
+             if (watch.key.page->is_live())
+-                watch.key.page->async_geolocation_position_response(watch.key.request_id, {}, to_underlying(ErrorCode::PermissionDenied));
++                watch.key.page->async_geolocation_position_response(watch.key.request_id, { }, to_underlying(ErrorCode::PermissionDenied));
+         }
+     }
+ 
+@@ -3543,11 +3573,11 @@
+     using ErrorCode = Web::Geolocation::GeolocationPositionError::ErrorCode;
+ 
+     if (Application::web_content_options().is_test_mode == IsTestMode::Yes)
+-        page.async_set_geolocation_emulated_position({ 37.7647658, -122.4345892, 100.0, 0.0, 0.0, 0.0, 0.0 }, {});
++        page.async_set_geolocation_emulated_position({ 37.7647658, -122.4345892, 100.0, 0.0, 0.0, 0.0, 0.0 }, { });
+     else if (Application::settings().geolocation_enabled())
+-        page.async_set_geolocation_emulated_position({}, {});
++        page.async_set_geolocation_emulated_position({ }, { });
+     else
+-        page.async_set_geolocation_emulated_position({}, to_underlying(ErrorCode::PermissionDenied));
++        page.async_set_geolocation_emulated_position({ }, to_underlying(ErrorCode::PermissionDenied));
+ }
+ 
+ void ViewImplementation::bookmarks_changed()
+@@ -4057,7 +4087,7 @@
+ 
+ void ViewImplementation::update_look_up_selected_text_action(Optional<DictionaryLookup> const& lookup, Gfx::IntPoint content_position)
+ {
+-    m_look_up = on_request_dictionary_lookup ? lookup : OptionalNone {};
++    m_look_up = on_request_dictionary_lookup ? lookup : OptionalNone { };
+     m_look_up_position = to_widget_position(content_position);
+     if (m_look_up.has_value() && m_look_up->baseline_origin.has_value())
+         m_look_up_position = to_widget_position(*m_look_up->baseline_origin);
+@@ -4109,8 +4139,8 @@
+             cut_selection_action.set_visible(for_input_events_target == Web::ContextMenuForInputEventsTarget::Yes);
+ 
+             auto const& search_engine = Application::settings().search_engine();
+-            weak_this->m_search_text = search_engine.has_value() ? selected_text : OptionalNone {};
+-            auto selected_text_url = selected_text.has_value() ? url_from_text(*selected_text) : OptionalNone {};
++            weak_this->m_search_text = search_engine.has_value() ? selected_text : OptionalNone { };
++            auto selected_text_url = selected_text.has_value() ? url_from_text(*selected_text) : OptionalNone { };
+             weak_this->update_look_up_selected_text_action(lookup, content_position);
+ 
+             ScopeGuard guard { [&]() {
+@@ -4181,7 +4211,7 @@
+ {
+     // URLs with an opaque path, such as data: URLs, do not contain a usable filename, so the default filename is
+     // used instead.
+-    auto suggested_filename = m_context_menu_url.has_an_opaque_path() ? ByteString {} : m_context_menu_url.basename();
++    auto suggested_filename = m_context_menu_url.has_an_opaque_path() ? ByteString { } : m_context_menu_url.basename();
+     auto download_path = prompt_for_path == PromptForPath::Yes
+         ? Application::the().path_for_downloaded_file(suggested_filename)
+         : Application::the().default_path_for_downloaded_file(suggested_filename);
+--- a/Libraries/LibWebView/ViewImplementation.h
++++ b/Libraries/LibWebView/ViewImplementation.h
+@@ -140,6 +140,7 @@
+     void set_next_history_visit_transition(HistoryVisitTransition transition) { m_history_visit_transition_for_next_load = transition; }
+     void load_html(StringView);
+     ErrorOr<void> enable_trusted_embedder_messaging(TrustedEmbedderMessageCallback, TrustedEmbedderMessagingLimits = { });
++    ErrorOr<void> enable_trusted_embedder_messaging_for_next_navigation(URL::URL const&, TrustedEmbedderMessageCallback, TrustedEmbedderMessagingLimits = { });
+     ErrorOr<void> send_trusted_embedder_message(TrustedEmbedderMessage const&);
+     void disable_trusted_embedder_messaging();
+     void load_navigation_error_page(StringView);
+@@ -177,7 +178,7 @@
+ 
+     Optional<SessionTabId> session_tab_id() const { return m_session_tab_id; }
+     void set_session_tab_id(SessionTabId session_tab_id) { m_session_tab_id = session_tab_id; }
+-    void clear_session_tab_id() { m_session_tab_id = {}; }
++    void clear_session_tab_id() { m_session_tab_id = { }; }
+ 
+     void zoom_in();
+     void zoom_out();
+@@ -257,7 +258,7 @@
+     void node_picker_preview(Compositing::DevicePixelPoint);
+     void node_picker_cancel();
+ 
+-    void inspect_dom_node(Compositing::UniqueNodeID node_id, DOMNodeProperties::Type, Optional<Web::CSS::PseudoElement> pseudo_element, JsonValue options = {});
++    void inspect_dom_node(Compositing::UniqueNodeID node_id, DOMNodeProperties::Type, Optional<Web::CSS::PseudoElement> pseudo_element, JsonValue options = { });
+     void inspect_grid_layouts(Compositing::UniqueNodeID root_node_id);
+     void inspect_current_grid(Compositing::UniqueNodeID node_id);
+     void inspect_current_flexbox(Compositing::UniqueNodeID node_id, bool only_look_at_parents);
+@@ -307,7 +308,7 @@
+     void list_style_sheets();
+     void request_style_sheet_source(Web::CSS::StyleSheetIdentifier const&);
+ 
+-    void debug_request(ByteString const& request, ByteString const& argument = {});
++    void debug_request(ByteString const& request, ByteString const& argument = { });
+ 
+     void run_javascript(String const&);
+     void js_console_input(String const&);
+@@ -600,7 +601,7 @@
+         No,
+         Yes,
+     };
+-    virtual void initialize_client(CreateNewClient = CreateNewClient::Yes, Optional<Web::HTML::CrossProcessId> initial_document_state_id = {});
++    virtual void initialize_client(CreateNewClient = CreateNewClient::Yes, Optional<Web::HTML::CrossProcessId> initial_document_state_id = { });
+     void cancel_all_native_geolocation_requests();
+     void send_geolocation_emulated_position(WebContentPage&);
+     WebContentPage& focused_navigable_host() const;
+@@ -609,7 +610,7 @@
+     struct CrashState;
+     void handle_web_content_process_crash();
+     void respawn_web_content_process_after_crash();
+-    void prepare_for_navigation_after_crash(Optional<URL::URL> navigation_to_retry = {});
++    void prepare_for_navigation_after_crash(Optional<URL::URL> navigation_to_retry = { });
+     void set_crash_state(Optional<CrashState>);
+ 
+     String current_host_for_settings() const;
+@@ -625,8 +626,8 @@
+     void update_bookmark_action();
+ 
+     void initialize_context_menus();
+-    void handle_external_url(URL::URL, URL::Origin, bool has_transient_activation, Function<void()> on_handler_unavailable = {});
+-    void handle_external_url_from_user_input(URL::URL const&, Function<void()> on_handler_unavailable = {});
++    void handle_external_url(URL::URL, URL::Origin, bool has_transient_activation, Function<void()> on_handler_unavailable = { });
++    void handle_external_url_from_user_input(URL::URL const&, Function<void()> on_handler_unavailable = { });
+     void complete_external_url_request();
+     void process_next_external_url_request();
+     void update_look_up_selected_text_action(Optional<DictionaryLookup> const& lookup, Gfx::IntPoint content_position);
+@@ -791,6 +792,7 @@
+ 
+     TrustedEmbedderMessageCallback m_trusted_embedder_message_callback;
+     TrustedEmbedderMessagingLimits m_trusted_embedder_messaging_limits;
++    Optional<URL::URL> m_trusted_embedder_messaging_expected_navigation_url;
+     RefPtr<TrustedEmbedderMessagingChannel> m_trusted_embedder_messaging_channel;
+     Optional<Utf16String> m_trusted_embedder_messaging_navigation_id;
+     bool m_trusted_embedder_messaging_armed { false };

@@ -81,7 +81,24 @@ void ChromeSurface::load(BrowserView const& browser)
             + QByteArrayLiteral("'), c => c.charCodeAt(0))));window.__photonPlatform='") + platform + QByteArrayLiteral("';</script>");
         html.insert(head_end, initial_state_script);
     }
-    auto channel_result = m_view->enable_trusted_embedder_messaging([this](WebView::TrustedEmbedderMessage message) {
+    Optional<URL::URL> dev_server_url;
+    if (!m_dev_server_origin.isEmpty()) {
+        QUrl url = m_dev_server_origin;
+        QUrlQuery query(url);
+        query.addQueryItem(QStringLiteral("photonInitialState"), QString::fromUtf8(initial_state));
+#ifdef Q_OS_MACOS
+        query.addQueryItem(QStringLiteral("photonPlatform"), QStringLiteral("macos"));
+#else
+        query.addQueryItem(QStringLiteral("photonPlatform"), QStringLiteral("other"));
+#endif
+        url.setQuery(query);
+        auto parsed_url = ak_url_from_qstring(url.toString());
+        if (!parsed_url.has_value())
+            return;
+        dev_server_url = parsed_url.release_value();
+    }
+
+    auto on_message = [this](WebView::TrustedEmbedderMessage message) {
         if (!m_trusted_document_loaded || !on_command)
             return;
         auto payload = message.payload.serialized();
@@ -90,30 +107,21 @@ void ChromeSurface::load(BrowserView const& browser)
             QByteArray(reinterpret_cast<char const*>(payload_bytes.data()), static_cast<qsizetype>(payload_bytes.size())));
         if (command.has_value())
             on_command(*command);
-    });
+    };
+    auto channel_result = dev_server_url.has_value()
+        ? m_view->enable_trusted_embedder_messaging_for_next_navigation(*dev_server_url, move(on_message))
+        : m_view->enable_trusted_embedder_messaging(move(on_message));
     if (channel_result.is_error())
         dbgln("Unable to enable Photon trusted message channel: {}", channel_result.error());
     m_trusted_document_loaded = !channel_result.is_error();
-    m_trusted_load_html_navigation_pending = true;
-    if (m_dev_server_origin.isEmpty()) {
+    if (!dev_server_url.has_value()) {
+        m_trusted_load_html_navigation_pending = true;
         m_view->load_html({ html.constData(), static_cast<size_t>(html.size()) });
         return;
     }
 
-    QUrl url = m_dev_server_origin;
-    QUrlQuery query(url);
-    query.addQueryItem(QStringLiteral("photonInitialState"), QString::fromUtf8(initial_state));
-#ifdef Q_OS_MACOS
-    query.addQueryItem(QStringLiteral("photonPlatform"), QStringLiteral("macos"));
-#else
-    query.addQueryItem(QStringLiteral("photonPlatform"), QStringLiteral("other"));
-#endif
-    url.setQuery(query);
-    auto parsed_url = ak_url_from_qstring(url.toString());
-    if (!parsed_url.has_value())
-        return;
     m_trusted_load_html_navigation_pending = false;
-    m_view->load(parsed_url.release_value());
+    m_view->load(*dev_server_url);
 }
 
 void ChromeSurface::update_state(BrowserView const& browser)
@@ -150,7 +158,6 @@ void ChromeSurface::focus_address_bar()
     if (result.is_error())
         dbgln("Unable to send focus-address event through trusted messaging: {}", result.error());
 }
-
 
 bool ChromeSurface::handle_navigation_request(URL::URL const& url)
 {

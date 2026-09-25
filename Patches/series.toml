@@ -59,3 +59,9 @@ id = "0010"
 file = "ladybird/0010-add-trusted-embedder-messaging-channel.patch"
 description = "Add trusted embedder messaging channel"
 area = "WebContent integration"
+
+[[patches]]
+id = "0011"
+file = "ladybird/0011-authorize-trusted-messaging-for-development-navigation.patch"
+description = "Authorize trusted messaging for development navigation"
+area = "WebContent integration"
