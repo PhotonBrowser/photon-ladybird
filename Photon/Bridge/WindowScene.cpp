@@ -329,11 +329,24 @@ bool WindowScene::eventFilter(QObject* watched, QEvent* event)
         else
             point = { -1, -1 };
 
+        auto* mouse = dynamic_cast<QMouseEvent*>(event);
+        auto scene_position = mouse ? m_active_page_view->mapTo(this, mouse->position().toPoint()) : QPoint { -1, -1 };
+        auto is_titlebar_double_click = mouse && event->type() == QEvent::MouseButtonDblClick
+            && mouse->button() == Qt::LeftButton && scene_position.y() >= 0 && scene_position.y() < 36;
+
         if ((event->type() == QEvent::MouseMove || event->type() == QEvent::MouseButtonPress
                 || event->type() == QEvent::MouseButtonRelease || event->type() == QEvent::MouseButtonDblClick
                 || event->type() == QEvent::Wheel)
-            && !page_contains(point))
+            && !page_contains(point) && !is_titlebar_double_click)
             return true;
+
+        if (is_titlebar_double_click) {
+            auto& chrome = m_chrome->view();
+            QMouseEvent forwarded(QEvent::MouseButtonDblClick, chrome.mapFrom(this, scene_position), mouse->globalPosition(), Qt::LeftButton, mouse->buttons(), mouse->modifiers());
+            QCoreApplication::sendEvent(&chrome, &forwarded);
+            event->accept();
+            return true;
+        }
     }
 
     // Qt can deliver directly to the page child even while the transparent
