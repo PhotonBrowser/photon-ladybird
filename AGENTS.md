@@ -55,7 +55,7 @@ Both surfaces use Ladybird WebContent views, but they are separate documents and
 
 - `PageSurface` content is hostile and untrusted. It must never receive `window.photon`, browser state, filesystem access, native objects, or equivalent privileged APIs.
 - `ChromeSurface` loads trusted bundled Photon application code. Its native message callback passes through `PhotonCommandTransport`'s fixed command allowlist and argument validation.
-- The native messaging capability is explicitly enabled for the bundled trusted chrome view, bound to its committed top-level document, and revoked when that document is replaced. Arbitrary top-level navigation from chrome is canceled; development permits only the pinned `http://127.0.0.1:5173` Vite origin, which has no native command capability. Do not let a navigated website retain chrome privileges.
+- The native messaging capability is explicitly enabled for the trusted chrome view, bound to its committed top-level document, and revoked when that document is replaced. Bundled chrome opts in through `load_html`; integrated development opts in for the exact initial Vite URL using a one-shot navigation authorization. Arbitrary top-level navigation from chrome is canceled; a navigated website must never retain chrome privileges.
 - The bundled chrome currently uses Ladybird's internal `load_html` path rather than a dedicated chrome origin. Keep the trusted document loading path narrow and do not broaden privileged APIs based on that internal-origin limitation.
 - No generic `eval`, JSON-RPC, arbitrary native invocation, or website-facing bridge is allowed.
 
@@ -89,7 +89,7 @@ npm run format:check
 npm run build
 ```
 
-`npm run format` writes formatting changes. Dependencies and build tooling belong in `package.json`/lockfile; do not add a runtime Node dependency, SSR framework, or large state-management framework without a concrete need. Ordinary webpages receive neither `window.photon` nor the native messaging binding. The development Vite page may expose the public TypeScript API for UI iteration but has no native command capability.
+`npm run format` writes formatting changes. Dependencies and build tooling belong in `package.json`/lockfile; do not add a runtime Node dependency, SSR framework, or large state-management framework without a concrete need. Use `./photon format`, `./photon lint`, or `./photon check` for Photon-scoped checks through the project CLI. Ordinary webpages receive neither `window.photon` nor the native messaging binding. A standalone Vite page has no native capability; only Vite loaded in the explicitly opted-in Photon ChromeSurface during `./photon run --dev` can use commands.
 
 ## Input routing and focus
 

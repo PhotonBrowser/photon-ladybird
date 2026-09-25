@@ -2,9 +2,10 @@
 
 ## Implemented architecture
 
-Photon enables trusted messaging only on its chrome view. The capability is
-armed for the next `load_html` call, attached to the matching committed
-top-level document, and identified by a monotonically increasing generation.
+Photon enables trusted messaging only on its chrome view. Bundled chrome arms
+the capability for the next `load_html` call; integrated development arms it
+for one explicitly supplied Vite URL. Both grants are attached to the matching
+committed top-level document and identified by a monotonically increasing generation.
 The binding validates the calling document at send time. Replacing the active
 document disconnects the channel and drops queued events. Ordinary views and
 unrelated documents receive no binding.
@@ -22,7 +23,7 @@ Photon typed decoder → PhotonApp (Rust) → AppEffects → C++ executor
 Native state/focus events return over the same channel to TypeScript
 subscribers. The public React API and Rust command/effect model are unchanged.
 The temporary `photon-command://` command transport has been removed; a missing
-trusted binding reports an explicit runtime error.
+trusted binding drops commands and reports a one-time console diagnostic.
 
 ## Original limitation (resolved)
 
@@ -139,14 +140,21 @@ The exact native-facing API on `ViewImplementation` is:
 ErrorOr<void> enable_trusted_embedder_messaging(
     TrustedEmbedderMessageCallback,
     TrustedEmbedderMessagingLimits = {});
+ErrorOr<void> enable_trusted_embedder_messaging_for_next_navigation(
+    URL::URL const& expected_url,
+    TrustedEmbedderMessageCallback,
+    TrustedEmbedderMessagingLimits = {});
 ErrorOr<void> send_trusted_embedder_message(TrustedEmbedderMessage const&);
 void disable_trusted_embedder_messaging();
 ```
 
-`enable...` arms exactly the next top-level `load_html()` call; it does not
-grant privilege to generic `load()`, a later navigation, or another view.
-Calling it twice before the load is an error. If the armed load fails or is
-superseded, the capability is discarded. A default view has no channel. The
+`enable_trusted_embedder_messaging()` arms exactly the next top-level
+`load_html()` call. The separate development API accepts one expected URL; the
+next `load(url)` consumes it only if `url` equals that exact URL, then ties the
+grant to that generated navigation ID and the committed document. A URL by
+itself is not authorization. A mismatch, aborted load, or superseding
+navigation discards the callback and grant. Calling either API twice while
+armed is an error. A default view has no channel. The
 view owns the callback and limits, and invokes the callback on its UI/event-loop
 thread. The callback must not capture an unowned view pointer. Disable, view
 destruction, document replacement, and endpoint disconnect clear the callback
@@ -202,8 +210,8 @@ connect_trusted_embedder_messaging(
 ```
 
 It is a UI-process-to-WebContent operation. The UI side sends it only after
-`WebContentPage::did_finish_loading` has matched the armed `load_html`
-navigation ID and confirmed the committed top-level document. The IPC handle
+`WebContentPage::did_finish_loading` has matched the authorized load/navigation
+ID and confirmed the committed top-level document. The IPC handle
 is therefore the authorization; ordinary HTML loading does not include a
 capability flag or handle. The WebContent side accepts it only for the routed
 top-level page's current active `Document`, rejects duplicate/stale
@@ -224,9 +232,11 @@ view/document.
 The capability is a tuple of `(PageId, navigation_id, generation,
 Document identity)`. It is not an origin grant and does not survive by URL.
 
-1. Native code arms the next `load_html()` on one view. `ViewImplementation`
-   records that request and its callback. The existing `load_html` IPC remains
-   unchanged and generates the navigation ID.
+1. Bundled chrome arms the next `load_html()` on one view. Integrated dev mode
+   instead arms one exact expected Vite URL; `ViewImplementation::load()` only
+   consumes that grant if the URL matches. A mismatch or superseding load
+   clears the callback. The existing load IPC already carries the generated
+   navigation ID, so no authorization IPC round trip is added.
 2. `WebContentPage::did_finish_loading` matches that exact navigation ID and
    creates a fresh paired transport. It sends the handle and generation to
    `PageClient`, which connects the handle to the current active top-level
@@ -248,7 +258,9 @@ Document identity)`. It is not an origin grant and does not survive by URL.
 Channel connection is activated from the matching
 `WebContentPage::did_finish_loading` transaction, after navigation identity
 has been checked. Do not install it by observing a URL such as `about:srcdoc`;
-that URL is not proof of embedder trust.
+that URL is not proof of embedder trust. For development, the URL match is
+only an additional one-shot constraint: explicit view opt-in and matching
+navigation/document identity remain the authorization.
 
 Photon's `ChromeSurface` also filters top-level navigation requests. Ladybird
 implements `WebContentView::load_html()` by starting an internal
@@ -330,13 +342,14 @@ dropped. A new document gets a fresh channel only after explicit authorization.
 
 ## Implemented file set
 
-Ladybird changes are represented by the consolidated Photon patch
-`Patches/ladybird/0010-add-trusted-embedder-messaging-channel.patch`:
+Ladybird changes are represented by registered Photon patches: patch 0010
+adds the generic channel, and patch 0011 adds exact-URL authorization for the
+integrated Vite development document.
 
 | Files | Responsibility |
 | --- | --- |
 | `Libraries/LibWebView/TrustedEmbedderMessaging.h/.cpp` | Public typed message/callback/limits API and view-scoped IPC channel. |
-| `Libraries/LibWebView/ViewImplementation.h/.cpp` | Per-view opt-in, next-`load_html` authorization, navigation identity and generation, stale grant cancellation, native send/disable. |
+| `Libraries/LibWebView/ViewImplementation.h/.cpp` | Per-view opt-in, next-`load_html` and exact-URL one-shot navigation authorization, navigation identity and generation, stale grant cancellation, native send/disable. |
 | `Libraries/LibWebView/WebContentPage.cpp`, `Services/WebContent/ConnectionFromClient.cpp`, `WebContentServer.ipc` | Route the explicitly authorized page and generation to WebContent. |
 | `Services/WebContent/TrustedEmbedderMessagingClient.ipc`, `TrustedEmbedderMessagingServer.ipc`, `TrustedEmbedderMessagingConnection.h/.cpp` | Bidirectional structured IPC, bounded event queue, document binding installation and revocation. |
 | `Services/WebContent/PageClient.h/.cpp`, `Libraries/LibWeb/Page/Page.h` | Bind to the active top-level document, validate document/generation on send/receive, clear the connection on replacement. |
@@ -346,8 +359,9 @@ Ladybird changes are represented by the consolidated Photon patch
 `ViewImplementation` API. Photon-owned integration is in
 `Photon/Bridge/ChromeSurface.cpp/.h`,
 `Photon/Bridge/PhotonCommandTransport.cpp/.h`, and
-`Photon/WebUI/src/bridge/transport.ts`. ChromeSurface opts in before `load_html`
-and supplies the typed native callback. The decoder accepts only bounded JSON
+`Photon/WebUI/src/bridge/transport.ts`. ChromeSurface opts in before
+`load_html()` in bundled mode and before the exact initial Vite URL navigation
+in integrated development mode, then supplies the typed native callback. The decoder accepts only bounded JSON
 messages with the explicit Photon command allowlist. React and Rust command,
 state, and effect types did not change for transport removal.
 
@@ -379,10 +393,11 @@ Rust snapshot / Photon native event
 
 The React public API, `PhotonCommand`, Rust `PhotonApp`, `AppCommand`,
 `AppEffects`, and native application dispatch stay unchanged. Only the
-transport implementation and its native typed decoder change. The development
-Vite view is not authorized by this `load_html`-scoped capability; its
-privileged commands fail closed with a missing-channel diagnostic. Loopback
-origin and query parameters do not grant the capability.
+transport implementation and its native typed decoder change. A standalone
+Vite page remains unprivileged. Integrated development mode is explicitly
+authorized by ChromeSurface for the exact initial loopback URL and committed
+document; the origin alone and later replacement documents do not grant the
+capability.
 
 ## Security properties and threat model
 
@@ -436,8 +451,11 @@ facilities demonstrably have the same lifecycle contract.
 
 ## Validation status
 
-The generic facility is implemented in consolidated patch 0010; Photon enables
-it only for its chrome view. On the freshly materialized Release build after
+The generic facility is implemented in
+`0010-add-trusted-embedder-messaging-channel.patch`; development navigation
+authorization is in
+`0011-authorize-trusted-messaging-for-development-navigation.patch`. Photon
+enables it only for its chrome view. On the freshly materialized Release build after
 removing the URL fallback, a real `window.photon.tabs.create()` call reached
 the native decoder as `new-tab`, then one native state event reached the
 TypeScript subscriber. Earlier runtime security checks confirmed an ordinary

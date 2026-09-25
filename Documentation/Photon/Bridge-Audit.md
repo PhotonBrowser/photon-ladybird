@@ -21,7 +21,7 @@ PhotonWindow dispatcher
     └── Qt window operations
 ```
 
-The TypeScript transport sends a structured message type and JSON payload. `PhotonCommandTransport.cpp` validates the message against Photon’s command allowlist, checks each command’s arguments, and constructs the existing typed native command. `PhotonWindow` routes application commands to Rust and Qt-specific operations to the native integration code. If trusted messaging is unavailable, dispatch fails with a diagnostic; there is no alternate command transport.
+The TypeScript transport sends a structured message type and JSON payload. `PhotonCommandTransport.cpp` validates the message against Photon’s command allowlist, checks each command’s arguments, and constructs the existing typed native command. `PhotonWindow` routes application commands to Rust and Qt-specific operations to the native integration code. If trusted messaging is unavailable, dispatch is dropped and a one-time console diagnostic is emitted; there is no alternate command transport.
 
 ## Reverse events
 
@@ -39,7 +39,7 @@ State and focus-address events use the trusted channel. Page-tooltip notificatio
 
 ## Capability and security boundary
 
-The native channel is explicitly enabled for the trusted chrome view only. Ladybird associates the grant with the intended committed top-level document, validates the caller document at invocation time, and revokes the channel and queued events on document replacement. A child frame cannot use a method obtained from `parent` or `top` to send a privileged message. Ordinary page views receive no binding. The trusted chrome is kept separate from page content; a trusted chrome navigation or replacement cannot transfer its capability to the replacement document.
+The native channel is explicitly enabled for the trusted chrome view only. The bundled document is authorized through `load_html`; development mode authorizes the exact initial Vite URL through a one-shot navigation grant. Ladybird associates either grant with the matching committed top-level document, validates the caller document at invocation time, and revokes the channel and queued events on document replacement. A child frame cannot use a method obtained from `parent` or `top` to send a privileged message. Ordinary page views receive no binding. The trusted chrome is kept separate from page content; a trusted chrome navigation or replacement cannot transfer its capability to the replacement document.
 
 Ladybird transports bounded structured JSON and has no Photon command names. Photon owns the command allowlist and validates message types and parameters. The bridge exposes no arbitrary native invocation, `eval`, filesystem operation, or generic method lookup. See [Trusted Embedder Messaging](Trusted-Embedder-Messaging.md) for the Ladybird API, lifecycle, limits, and threat model.
 

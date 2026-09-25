@@ -26,7 +26,7 @@ The checked-out compositor does not expose a generic multi-surface native scene,
 
 `WindowScene` captures the 72-pixel titlebar and toolbar, active internal pages, and the full scene while a React overlay is open. It forwards pointer and wheel events elsewhere to the active page view. The overlay scrim owns outside clicks; native code only blocks page input until React closes the overlay. Qt focus selects whether keyboard events go to the chrome or the active page. The tab state lives in Rust; each tab keeps a separate Ladybird `WebContentView` so engine history survives tab switches.
 
-The chrome and page are separate top-level WebContent contexts. Only `ChromeSurface`'s bundled trusted document receives the view-scoped native messaging binding; ordinary pages have neither `window.photon` nor the native object. The development Vite page may expose the public `window.photon` API for UI iteration, but it is not authorized for native commands and dispatch fails explicitly. `Photon/WebUI/src/bridge/transport.ts` defines the discriminated TypeScript command model and transport interface. Commands travel as structured messages through Ladybird IPC to the Photon typed decoder. The decoder validates command names and arguments before `Window::dispatch_command` routes browser, tab, and preference operations through `BrowserView` to Rust, and window and overlay-capture operations to Qt. State and focus-address events return over the trusted channel; tooltips remain fixed native-to-chrome DOM events. ChromeSurface cancels unexpected top-level navigation, with a one-shot allowance for the internal `about:srcdoc` load. Development mode permits the pinned `http://127.0.0.1:5173` page to load for UI iteration but does not authorize it for privileged native commands. Rust owns browser state and URL normalization; the bridge exposes no filesystem access, arbitrary invocation, or generic JSON-RPC. See [Architecture](Architecture.md), the [bridge audit](Bridge-Audit.md), and [Trusted Embedder Messaging](Trusted-Embedder-Messaging.md) for lifecycle and security details.
+The chrome and page are separate top-level WebContent contexts. Only ChromeSurface's explicitly enabled chrome view receives the view-scoped native messaging binding; ordinary pages have neither `window.photon` nor the native object. Standalone `npm run dev` has no native capability. Integrated `./photon run --dev` authorizes only its exact initial Vite URL for the chrome view, bound to the resulting committed top-level document. `Photon/WebUI/src/bridge/transport.ts` defines the discriminated TypeScript command model and transport interface. Commands travel as structured messages through Ladybird IPC to the Photon typed decoder. The decoder validates command names and arguments before `Window::dispatch_command` routes browser, tab, and preference operations through `BrowserView` to Rust, and window and overlay-capture operations to Qt. State and focus-address events return over the trusted channel; tooltips remain fixed native-to-chrome DOM events. ChromeSurface cancels unexpected top-level navigation, with a one-shot allowance for the internal `about:srcdoc` load. Rust owns browser state and URL normalization; the bridge exposes no filesystem access, arbitrary invocation, or generic JSON-RPC. See [Architecture](Architecture.md), the [bridge audit](Bridge-Audit.md), and [Trusted Embedder Messaging](Trusted-Embedder-Messaging.md) for lifecycle and security details.
 
 The bundled document is loaded through Ladybird's `load_html` internal-document path rather than a dedicated `photon://chrome/` origin. The native navigation policy keeps that surface on the bundled document, but a dedicated internal origin would provide a clearer engine-level identity if Photon later adds broader privileged APIs.
 
@@ -56,7 +56,7 @@ npm install
 npm run dev
 ```
 
-The Vite server is for UI-only work. The browser chrome renders with a sample new-tab state, but privileged commands fail explicitly because standalone development does not install the trusted native binding. Integrated `./photon run --dev` currently loads the pinned Vite document without arming the `load_html`-scoped capability, so its privileged commands also report the missing bridge; production bundled chrome is the supported native-command path.
+The standalone Vite server is for UI-only work. The browser chrome renders with a sample new-tab state, but privileged commands are dropped with a one-time console diagnostic because a browser tab opened directly to Vite has no native binding. Use the integrated Photon dev command below when testing native commands.
 
 For integrated frontend development, use the native Photon window with Vite hot reload:
 
@@ -65,7 +65,18 @@ For integrated frontend development, use the native Photon window with Vite hot 
 # shorthand: ./photon run dev
 ```
 
-This starts Vite on `127.0.0.1:5173`, waits for the project page to respond, and opens Photon against that page. Saving a WebUI source file hot reloads the chrome without rebuilding Ladybird or Photon. The command performs a native build when the Photon binary is missing or older than a source or build input. While running, it watches Rust, C++, and build configuration files across the checkout; a change stops Photon and Vite, rebuilds Photon, then starts both again. Use `./photon run --no-build --dev` to require an up-to-date binary at startup. Closing Photon also stops Vite. Dev mode never runs the production bundle; plain `./photon run` builds `dist/index.html` so the chrome renders without a dev server.
+This starts Vite on `127.0.0.1:5173`, waits for the Photon page to respond, and opens Photon against that page. ChromeSurface opts its own view into trusted messaging for the exact initial Vite URL, so commands and state events use the same native channel as bundled chrome. The authorization follows the committed document identity; a different navigation does not inherit it. Saving a WebUI source file hot reloads the chrome without rebuilding Ladybird or Photon. The command performs a native build when the Photon binary is missing or older than a source or build input. While running, it watches Rust, C++, and build configuration files across the checkout; a change stops Photon and Vite, rebuilds Photon, then starts both again. Use `./photon run --no-build --dev` to require an up-to-date binary at startup. Closing Photon also stops Vite. Dev mode never runs the production bundle; plain `./photon run` builds `dist/index.html` so the chrome renders without a dev server.
+
+Photon's developer CLI also provides consistent quality commands:
+
+```bash
+./photon format          # apply Rust, C++, and WebUI formatting
+./photon format --check  # verify formatting without writing
+./photon lint            # Clippy, C++ formatting, WebUI lint and typecheck
+./photon check           # format check plus all Photon linters/typechecks
+```
+
+These commands use `rustfmt`, `clang-format`, and the WebUI's pinned Biome dependency, scoped to Photon-owned source. They do not format Ladybird engine files. Install WebUI dependencies with `npm install` in `Photon/WebUI` if needed.
 
 Production bundle:
 
