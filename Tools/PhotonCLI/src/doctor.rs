@@ -40,6 +40,7 @@ pub fn run(repository: &Path) -> Result<i32> {
     blocking_problems += check_tool("Git", "git", &["--version"], None);
     blocking_problems += check_tool("Rust", "rustc", &["--version"], None);
     blocking_problems += check_tool("Cargo", "cargo", &["--version"], None);
+    blocking_problems += check_tool("C++ formatter", "clang-format", &["--version"], None);
     blocking_problems += check_tool("CMake", "cmake", &["--version"], Some(MINIMUM_CMAKE));
     blocking_problems += check_tool("Ninja", "ninja", &["--version"], None);
 

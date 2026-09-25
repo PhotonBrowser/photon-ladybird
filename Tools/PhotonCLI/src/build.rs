@@ -758,7 +758,7 @@ fn profile_ninja_entries(
             stats.other_ms += duration;
         }
     }
-    stats.slowest_units.sort_by(|left, right| right.0.cmp(&left.0));
+    stats.slowest_units.sort_by_key(|entry| std::cmp::Reverse(entry.0));
     stats.slowest_units.truncate(5);
     Ok(stats)
 }
@@ -795,7 +795,6 @@ fn ccache_calls() -> Option<CcacheCalls> {
             continue;
         };
         let Some(count) = value
-            .trim()
             .split_whitespace()
             .next()
             .and_then(|value| value.parse::<u64>().ok())

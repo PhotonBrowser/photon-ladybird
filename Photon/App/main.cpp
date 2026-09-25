@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: GPL-3.0-only
  */
 
-#include <LibMain/Main.h>
 #include <AK/Debug.h>
+#include <LibMain/Main.h>
 #include <Photon/Bridge/BrowserView.h>
 #include <Photon/Bridge/PhotonApplication.h>
 #include <Photon/Bridge/PhotonWindow.h>

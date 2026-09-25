@@ -6,6 +6,7 @@ mod metadata;
 mod output;
 mod patches;
 mod process;
+mod quality;
 mod remote;
 mod sync;
 mod ui;
@@ -51,6 +52,12 @@ enum Command {
     Test(TestArgs),
     /// Check the local Photon development environment
     Doctor,
+    /// Format Photon-owned source (use --check to verify without changes)
+    Format(FormatArgs),
+    /// Run Photon-owned linters and type checks
+    Lint,
+    /// Run all Photon formatting checks and linters
+    Check,
     /// Sync upstream, record its base, and refresh generated engine trees
     Sync(SyncArgs),
     /// Inspect or update the Photon origin remote
@@ -190,6 +197,13 @@ struct TestArgs {
     verbose: bool,
 }
 
+#[derive(Debug, Args)]
+struct FormatArgs {
+    /// Check formatting without writing changes
+    #[arg(long)]
+    check: bool,
+}
+
 fn main() -> ExitCode {
     match run() {
         Ok(code) => exit_code(code),
@@ -229,6 +243,9 @@ fn run() -> Result<i32> {
         Command::Clean => build::clean(&repository, "Release"),
         Command::Test(args) => build::test(&repository, "Release", args.pattern.as_deref(), args.verbose),
         Command::Doctor => doctor::run(&repository),
+        Command::Format(args) => quality::format(&repository, args.check),
+        Command::Lint => quality::lint(&repository),
+        Command::Check => quality::check(&repository),
         Command::Sync(args) => sync::run(&repository, args.fetch_only, args.no_fetch),
         Command::Remote {
             command: RemoteCommand::Status,
