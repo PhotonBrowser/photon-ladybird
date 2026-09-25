@@ -1,0 +1,951 @@
+diff --git a/Libraries/LibWeb/CMakeLists.txt b/Libraries/LibWeb/CMakeLists.txt
+index 67b71809..631009aa 100644
+--- a/Libraries/LibWeb/CMakeLists.txt
++++ b/Libraries/LibWeb/CMakeLists.txt
+@@ -772,6 +772,7 @@ set(SOURCES
+     Internals/InternalGamepad.cpp
+     Internals/Internals.cpp
+     Internals/InternalsBase.cpp
++    Internals/TrustedEmbedderMessaging.cpp
+     Internals/WebUI.cpp
+     Internals/XRTest.cpp
+     IntersectionObserver/IntersectionObserver.cpp
+diff --git a/Libraries/LibWeb/Forward.h b/Libraries/LibWeb/Forward.h
+index ca272470..000e4bae 100644
+--- a/Libraries/LibWeb/Forward.h
++++ b/Libraries/LibWeb/Forward.h
+@@ -977,6 +977,7 @@ namespace Web::Internals {
+ class FakeXRDevice;
+ class Internals;
+ class InternalGamepad;
++class TrustedEmbedderMessaging;
+ class WebUI;
+ class XRTest;
+ 
+diff --git a/Libraries/LibWeb/Internals/TrustedEmbedderMessaging.cpp b/Libraries/LibWeb/Internals/TrustedEmbedderMessaging.cpp
+new file mode 100644
+index 00000000..da3f07a4
+--- /dev/null
++++ b/Libraries/LibWeb/Internals/TrustedEmbedderMessaging.cpp
+@@ -0,0 +1,82 @@
++/*
++ * Copyright (c) 2026-present, the Ladybird developers.
++ *
++ * SPDX-License-Identifier: BSD-2-Clause
++ */
++
++#include <LibWeb/DOM/Document.h>
++#include <LibWeb/HTML/LocalNavigable.h>
++#include <LibWeb/HTML/Scripting/Environments.h>
++#include <LibWeb/HTML/Window.h>
++#include <LibWeb/Internals/TrustedEmbedderMessaging.h>
++#include <LibWeb/Page/Page.h>
++#include <LibWeb/WebDriver/JSON.h>
++
++namespace Web::Internals {
++
++GC_DEFINE_ALLOCATOR(TrustedEmbedderMessaging);
++
++GC::Ref<TrustedEmbedderMessaging> TrustedEmbedderMessaging::create(HTML::Window& window)
++{
++    return GC::Heap::the().allocate<TrustedEmbedderMessaging>(window);
++}
++
++TrustedEmbedderMessaging::TrustedEmbedderMessaging(HTML::Window& window)
++    : InternalsBase(window)
++{
++}
++
++TrustedEmbedderMessaging::~TrustedEmbedderMessaging() = default;
++
++WebIDL::ExceptionOr<void> TrustedEmbedderMessaging::post_message(Utf16String const& type, JS::Value payload)
++{
++    auto& authorized_document = window().associated_document();
++    auto& caller_settings = HTML::incumbent_settings_object();
++    auto* caller_window = HTML::window_from_global_object(caller_settings.global_object());
++    if (!caller_window || &caller_window->associated_document() != &authorized_document)
++        return WebIDL::SecurityError::create("Trusted embedder messages may only be sent by their authorized document"_utf16);
++
++    auto navigable = authorized_document.navigable();
++    if (!navigable || !navigable->is_top_level_traversable() || !authorized_document.is_fully_active())
++        return WebIDL::SecurityError::create("The authorized embedder document is no longer active"_utf16);
++
++    auto local_navigable = as_if<HTML::LocalNavigable>(navigable.ptr());
++    if (!local_navigable || local_navigable->active_document().ptr() != &authorized_document)
++        return WebIDL::SecurityError::create("The authorized embedder document is no longer active"_utf16);
++
++    auto browsing_context = authorized_document.browsing_context();
++    if (!browsing_context)
++        return WebIDL::SecurityError::create("The authorized embedder document has no browsing context"_utf16);
++    auto serialized_payload = Web::WebDriver::json_clone(*browsing_context, payload);
++    if (serialized_payload.is_error())
++        return WebIDL::DataCloneError::create("Embedder message payload must be JSON serializable"_utf16);
++    auto type_utf8 = type.to_utf8();
++    auto serialized_payload_json = serialized_payload.value().serialized();
++    if (type_utf8.is_empty() || type_utf8.bytes().size() > 128 || serialized_payload_json.bytes().size() > 64 * 1024)
++        return WebIDL::DataCloneError::create("Embedder message exceeds the size limit"_utf16);
++
++    if (!page().client().send_trusted_embedder_message(type_utf8, serialized_payload.release_value()))
++        return WebIDL::SecurityError::create("The trusted embedder messaging channel is no longer active"_utf16);
++    return { };
++}
++
++WebIDL::ExceptionOr<Utf16String> TrustedEmbedderMessaging::receive_messages()
++{
++    auto& authorized_document = window().associated_document();
++    auto& caller_settings = HTML::incumbent_settings_object();
++    auto* caller_window = HTML::window_from_global_object(caller_settings.global_object());
++    if (!caller_window || &caller_window->associated_document() != &authorized_document)
++        return WebIDL::SecurityError::create("Embedder messages may only be read by their authorized document"_utf16);
++
++    auto navigable = authorized_document.navigable();
++    if (!navigable || !navigable->is_top_level_traversable() || !authorized_document.is_fully_active())
++        return WebIDL::SecurityError::create("The authorized embedder document is no longer active"_utf16);
++    auto local_navigable = as_if<HTML::LocalNavigable>(navigable.ptr());
++    if (!local_navigable || local_navigable->active_document().ptr() != &authorized_document)
++        return WebIDL::SecurityError::create("The authorized embedder document is no longer active"_utf16);
++
++    auto messages = page().client().take_trusted_embedder_messages(authorized_document);
++    return Utf16String::from_utf8_without_validation(messages.bytes_as_string_view());
++}
++
++}
+diff --git a/Libraries/LibWeb/Internals/TrustedEmbedderMessaging.h b/Libraries/LibWeb/Internals/TrustedEmbedderMessaging.h
+new file mode 100644
+index 00000000..a62752a1
+--- /dev/null
++++ b/Libraries/LibWeb/Internals/TrustedEmbedderMessaging.h
+@@ -0,0 +1,33 @@
++/*
++ * Copyright (c) 2026-present, the Ladybird developers.
++ *
++ * SPDX-License-Identifier: BSD-2-Clause
++ */
++
++#pragma once
++
++#include <AK/Types.h>
++#include <AK/Utf16String.h>
++#include <LibJS/Runtime/Value.h>
++#include <LibWeb/Export.h>
++#include <LibWeb/Internals/InternalsBase.h>
++#include <LibWeb/WebIDL/ExceptionOr.h>
++
++namespace Web::Internals {
++
++class WEB_API TrustedEmbedderMessaging final : public InternalsBase {
++    WEB_WRAPPABLE(TrustedEmbedderMessaging, InternalsBase);
++    GC_DECLARE_ALLOCATOR(TrustedEmbedderMessaging);
++
++public:
++    static GC::Ref<TrustedEmbedderMessaging> create(HTML::Window&);
++    virtual ~TrustedEmbedderMessaging() override;
++
++    WebIDL::ExceptionOr<void> post_message(Utf16String const& type, JS::Value payload);
++    WebIDL::ExceptionOr<Utf16String> receive_messages();
++
++private:
++    explicit TrustedEmbedderMessaging(HTML::Window&);
++};
++
++}
+diff --git a/Libraries/LibWeb/Internals/TrustedEmbedderMessaging.idl b/Libraries/LibWeb/Internals/TrustedEmbedderMessaging.idl
+new file mode 100644
+index 00000000..b9b63b6d
+--- /dev/null
++++ b/Libraries/LibWeb/Internals/TrustedEmbedderMessaging.idl
+@@ -0,0 +1,5 @@
++[Exposed=Nobody]
++interface TrustedEmbedderMessaging {
++    undefined postMessage(DOMString type, any payload);
++    DOMString receiveMessages();
++};
+diff --git a/Libraries/LibWeb/Page/Page.h b/Libraries/LibWeb/Page/Page.h
+index a80fd257..ce84d79c 100644
+--- a/Libraries/LibWeb/Page/Page.h
++++ b/Libraries/LibWeb/Page/Page.h
+@@ -818,6 +818,8 @@ public:
+     virtual void page_did_take_screenshot(Gfx::ShareableBitmap const&) { }
+ 
+     virtual void received_message_from_web_ui([[maybe_unused]] Utf16String const& name, [[maybe_unused]] JS::Value data) { }
++    virtual bool send_trusted_embedder_message(String const&, JsonValue) { return false; }
++    virtual String take_trusted_embedder_messages([[maybe_unused]] DOM::Document const&) { return "[]"_string; }
+ 
+     virtual bool is_headless() const = 0;
+ 
+diff --git a/Libraries/LibWeb/idl_files.cmake b/Libraries/LibWeb/idl_files.cmake
+index d4d36275..ebb8a764 100644
+--- a/Libraries/LibWeb/idl_files.cmake
++++ b/Libraries/LibWeb/idl_files.cmake
+@@ -401,6 +401,7 @@ libweb_js_bindings(Internals/InternalAnimationTimeline)
+ libweb_js_bindings(Internals/InternalGamepad)
+ libweb_js_bindings(Internals/Internals)
+ libweb_js_bindings(Internals/WebUI)
++libweb_js_bindings(Internals/TrustedEmbedderMessaging)
+ libweb_js_bindings(Internals/XRTest)
+ libweb_js_bindings(IntersectionObserver/IntersectionObserver)
+ libweb_js_bindings(IntersectionObserver/IntersectionObserverEntry)
+diff --git a/Libraries/LibWebView/CMakeLists.txt b/Libraries/LibWebView/CMakeLists.txt
+index e74a4eb7..b5aa7bcd 100644
+--- a/Libraries/LibWebView/CMakeLists.txt
++++ b/Libraries/LibWebView/CMakeLists.txt
+@@ -65,6 +65,7 @@ set(SOURCES
+     UserAgent.cpp
+     Utilities.cpp
+     ViewImplementation.cpp
++    TrustedEmbedderMessaging.cpp
+     WebContentClient.cpp
+     WebContentPage.cpp
+     WebContentTestClient.cpp
+@@ -111,6 +112,8 @@ set(GENERATED_SOURCES
+     ../../Services/WebDriver/WebDriverBrowserServerEndpoint.h
+     ../../Services/WebContent/WebUIClientEndpoint.h
+     ../../Services/WebContent/WebUIServerEndpoint.h
++    ../../Services/WebContent/TrustedEmbedderMessagingClientEndpoint.h
++    ../../Services/WebContent/TrustedEmbedderMessagingServerEndpoint.h
+     UIProcessClientEndpoint.h
+     UIProcessServerEndpoint.h
+ )
+@@ -123,6 +126,8 @@ compile_ipc(${LADYBIRD_SOURCE_DIR}/Services/WebDriver/WebDriverBrowserClient.ipc
+ compile_ipc(${LADYBIRD_SOURCE_DIR}/Services/WebDriver/WebDriverBrowserServer.ipc ${CMAKE_BINARY_DIR}/Services/WebDriver/WebDriverBrowserServerEndpoint.h)
+ compile_ipc(${LADYBIRD_SOURCE_DIR}/Services/WebContent/WebUIClient.ipc ${CMAKE_BINARY_DIR}/Services/WebContent/WebUIClientEndpoint.h)
+ compile_ipc(${LADYBIRD_SOURCE_DIR}/Services/WebContent/WebUIServer.ipc ${CMAKE_BINARY_DIR}/Services/WebContent/WebUIServerEndpoint.h)
++compile_ipc(${LADYBIRD_SOURCE_DIR}/Services/WebContent/TrustedEmbedderMessagingClient.ipc ${CMAKE_BINARY_DIR}/Services/WebContent/TrustedEmbedderMessagingClientEndpoint.h)
++compile_ipc(${LADYBIRD_SOURCE_DIR}/Services/WebContent/TrustedEmbedderMessagingServer.ipc ${CMAKE_BINARY_DIR}/Services/WebContent/TrustedEmbedderMessagingServerEndpoint.h)
+ 
+ set(build_information_header "${CMAKE_CURRENT_BINARY_DIR}/BuildInformation.h")
+ set(build_information_stamp "${CMAKE_CURRENT_BINARY_DIR}/BuildInformation.stamp")
+diff --git a/Libraries/LibWebView/TrustedEmbedderMessaging.cpp b/Libraries/LibWebView/TrustedEmbedderMessaging.cpp
+new file mode 100644
+index 00000000..7fbc19f4
+--- /dev/null
++++ b/Libraries/LibWebView/TrustedEmbedderMessaging.cpp
+@@ -0,0 +1,67 @@
++/*
++ * Copyright (c) 2026-present, the Ladybird developers.
++ *
++ * SPDX-License-Identifier: BSD-2-Clause
++ */
++
++#include <LibIPC/Transport.h>
++#include <LibIPC/TransportHandle.h>
++#include <LibWebView/TrustedEmbedderMessaging.h>
++#include <LibWebView/WebContentClient.h>
++
++namespace WebView {
++
++ErrorOr<NonnullRefPtr<TrustedEmbedderMessagingChannel>> TrustedEmbedderMessagingChannel::create(
++    WebContentClient& client, Compositing::PageId page_id, Utf16String navigation_id, u64 generation,
++    TrustedEmbedderMessageCallback callback, TrustedEmbedderMessagingLimits limits)
++{
++    auto paired = TRY(IPC::Transport::create_paired());
++    auto channel = adopt_ref(*new TrustedEmbedderMessagingChannel(move(paired.local), generation, move(callback), limits));
++    client.async_connect_trusted_embedder_messaging(page_id, move(navigation_id), generation, move(paired.remote_handle));
++    return channel;
++}
++
++TrustedEmbedderMessagingChannel::TrustedEmbedderMessagingChannel(
++    NonnullOwnPtr<IPC::Transport> transport, u64 generation, TrustedEmbedderMessageCallback callback, TrustedEmbedderMessagingLimits limits)
++    : IPC::ConnectionToServer<TrustedEmbedderMessagingClientEndpoint, TrustedEmbedderMessagingServerEndpoint>(*this, move(transport))
++    , m_generation(generation)
++    , m_callback(move(callback))
++    , m_limits(limits)
++{
++}
++
++TrustedEmbedderMessagingChannel::~TrustedEmbedderMessagingChannel() = default;
++
++ErrorOr<void> TrustedEmbedderMessagingChannel::send(TrustedEmbedderMessage const& message)
++{
++    if (!m_callback)
++        return Error::from_string_literal("Trusted embedder messaging channel is disconnected");
++    if (message.type.is_empty() || message.type.bytes().size() > m_limits.maximum_type_size)
++        return Error::from_string_literal("Trusted embedder message type is invalid");
++    auto serialized_payload = message.payload.serialized();
++    if (serialized_payload.bytes().size() > m_limits.maximum_serialized_message_size)
++        return Error::from_string_literal("Trusted embedder message exceeds the size limit");
++
++    async_send_message(m_generation, message.type, message.payload);
++    return { };
++}
++
++void TrustedEmbedderMessagingChannel::die()
++{
++    m_callback = { };
++}
++
++void TrustedEmbedderMessagingChannel::received_message(u64 generation, String type, JsonValue payload)
++{
++    if (generation != m_generation || !m_callback)
++        return;
++    if (type.is_empty() || type.bytes().size() > m_limits.maximum_type_size)
++        return;
++    auto serialized_payload = payload.serialized();
++    if (serialized_payload.bytes().size() > m_limits.maximum_serialized_message_size)
++        return;
++
++    m_callback({ move(type), move(payload) });
++}
++
++}
+diff --git a/Libraries/LibWebView/TrustedEmbedderMessaging.h b/Libraries/LibWebView/TrustedEmbedderMessaging.h
+new file mode 100644
+index 00000000..bac0ffb5
+--- /dev/null
++++ b/Libraries/LibWebView/TrustedEmbedderMessaging.h
+@@ -0,0 +1,60 @@
++/*
++ * Copyright (c) 2026-present, the Ladybird developers.
++ *
++ * SPDX-License-Identifier: BSD-2-Clause
++ */
++
++#pragma once
++
++#include <AK/Error.h>
++#include <AK/Function.h>
++#include <AK/JsonValue.h>
++#include <AK/NonnullRefPtr.h>
++#include <AK/String.h>
++#include <AK/Types.h>
++#include <AK/Utf16String.h>
++#include <LibCompositing/PageId.h>
++#include <LibIPC/ConnectionToServer.h>
++#include <LibIPC/Transport.h>
++#include <LibWebView/Export.h>
++#include <WebContent/TrustedEmbedderMessagingClientEndpoint.h>
++#include <WebContent/TrustedEmbedderMessagingServerEndpoint.h>
++
++namespace WebView {
++
++class WebContentClient;
++
++struct TrustedEmbedderMessage {
++    String type;
++    JsonValue payload;
++};
++
++using TrustedEmbedderMessageCallback = Function<void(TrustedEmbedderMessage)>;
++
++struct TrustedEmbedderMessagingLimits {
++    size_t maximum_serialized_message_size { 64 * 1024 };
++    size_t maximum_type_size { 128 };
++};
++
++class WEBVIEW_API TrustedEmbedderMessagingChannel final
++    : public IPC::ConnectionToServer<TrustedEmbedderMessagingClientEndpoint, TrustedEmbedderMessagingServerEndpoint>
++    , public TrustedEmbedderMessagingClientEndpoint {
++public:
++    static ErrorOr<NonnullRefPtr<TrustedEmbedderMessagingChannel>> create(
++        WebContentClient&, Compositing::PageId, Utf16String navigation_id, u64 generation,
++        TrustedEmbedderMessageCallback, TrustedEmbedderMessagingLimits);
++    virtual ~TrustedEmbedderMessagingChannel() override;
++
++    ErrorOr<void> send(TrustedEmbedderMessage const&);
++
++private:
++    TrustedEmbedderMessagingChannel(NonnullOwnPtr<IPC::Transport>, u64, TrustedEmbedderMessageCallback, TrustedEmbedderMessagingLimits);
++    virtual void die() override;
++    virtual void received_message(u64 generation, String type, JsonValue payload) override;
++
++    u64 m_generation { 0 };
++    TrustedEmbedderMessageCallback m_callback;
++    TrustedEmbedderMessagingLimits m_limits;
++};
++
++}
+diff --git a/Libraries/LibWebView/ViewImplementation.cpp b/Libraries/LibWebView/ViewImplementation.cpp
+index b9875d51..58e5003a 100644
+--- a/Libraries/LibWebView/ViewImplementation.cpp
++++ b/Libraries/LibWebView/ViewImplementation.cpp
+@@ -380,6 +380,12 @@ void ViewImplementation::set_has_system_focus(bool has_system_focus)
+ 
+ void ViewImplementation::load(URL::URL const& url, Web::Bindings::NavigationHistoryBehavior history_handling)
+ {
++    if (m_trusted_embedder_messaging_armed || m_trusted_embedder_messaging_navigation_id.has_value()) {
++        m_trusted_embedder_messaging_armed = false;
++        m_trusted_embedder_messaging_navigation_id.clear();
++        m_trusted_embedder_message_callback = { };
++    }
++
+     if (on_before_browser_initiated_navigation)
+         on_before_browser_initiated_navigation();
+ 
+@@ -475,6 +481,13 @@ void ViewImplementation::load_html(StringView html)
+     prepare_for_navigation_after_crash();
+     set_loading_state(true);
+     auto navigation_id = generate_navigation_id();
++    m_trusted_embedder_messaging_channel = nullptr;
++    m_trusted_embedder_messaging_navigation_id = m_trusted_embedder_messaging_armed
++        ? Optional<Utf16String> { navigation_id }
++        : Optional<Utf16String> { };
++    if (!m_trusted_embedder_messaging_armed)
++        m_trusted_embedder_message_callback = { };
++    m_trusted_embedder_messaging_armed = false;
+     m_top_level_traversable.set_ongoing_navigation(CanonicalNavigable::OngoingNavigation {
+         .url = URL::about_srcdoc(),
+         .navigation_id = navigation_id,
+@@ -484,6 +497,52 @@ void ViewImplementation::load_html(StringView html)
+     client().async_load_html(page_id(), html, navigation_id.utf16_view());
+ }
+ 
++ErrorOr<void> ViewImplementation::enable_trusted_embedder_messaging(TrustedEmbedderMessageCallback callback, TrustedEmbedderMessagingLimits limits)
++{
++    if (!callback)
++        return Error::from_string_literal("Trusted embedder messaging requires an inbound callback");
++    if (m_trusted_embedder_messaging_armed)
++        return Error::from_string_literal("Trusted embedder messaging is already armed for a load");
++
++    m_trusted_embedder_message_callback = move(callback);
++    m_trusted_embedder_messaging_limits.maximum_serialized_message_size = min(limits.maximum_serialized_message_size, 64 * 1024);
++    m_trusted_embedder_messaging_limits.maximum_type_size = min(limits.maximum_type_size, 128);
++    m_trusted_embedder_messaging_armed = true;
++    m_trusted_embedder_messaging_navigation_id.clear();
++    return { };
++}
++
++ErrorOr<void> ViewImplementation::send_trusted_embedder_message(TrustedEmbedderMessage const& message)
++{
++    if (!m_trusted_embedder_messaging_channel)
++        return Error::from_string_literal("Trusted embedder messaging is not connected");
++    return m_trusted_embedder_messaging_channel->send(message);
++}
++
++void ViewImplementation::disable_trusted_embedder_messaging()
++{
++    m_trusted_embedder_messaging_armed = false;
++    m_trusted_embedder_messaging_navigation_id.clear();
++    m_trusted_embedder_message_callback = { };
++    m_trusted_embedder_messaging_channel = nullptr;
++}
++
++ErrorOr<void> ViewImplementation::connect_trusted_embedder_messaging(Utf16String const& navigation_id, WebContentPage& page)
++{
++    if (!m_trusted_embedder_messaging_navigation_id.has_value() || *m_trusted_embedder_messaging_navigation_id != navigation_id)
++        return { };
++
++    m_trusted_embedder_messaging_navigation_id.clear();
++    if (!m_trusted_embedder_message_callback)
++        return Error::from_string_literal("Trusted embedder messaging callback was cleared before document activation");
++
++    auto generation = ++m_trusted_embedder_messaging_generation;
++    m_trusted_embedder_messaging_channel = TRY(TrustedEmbedderMessagingChannel::create(
++        client(), page.id(), navigation_id, generation,
++        move(m_trusted_embedder_message_callback), m_trusted_embedder_messaging_limits));
++    return { };
++}
++
+ void ViewImplementation::load_navigation_error_page(StringView text)
+ {
+     auto message = MUST(String::formatted("Failed to load \"{}\"", text));
+@@ -2533,6 +2592,12 @@ void ViewImplementation::cancel_all_native_geolocation_requests()
+ 
+ void ViewImplementation::did_start_navigation(Optional<Utf16String> navigation_id, URL::URL const& url)
+ {
++    if (m_trusted_embedder_messaging_navigation_id.has_value()
++        && (!navigation_id.has_value() || *m_trusted_embedder_messaging_navigation_id != *navigation_id)) {
++        m_trusted_embedder_messaging_navigation_id.clear();
++        m_trusted_embedder_message_callback = { };
++    }
++
+     auto& ongoing = m_top_level_traversable.ensure_ongoing_navigation();
+     if (ongoing.sequence_number == 0)
+         ongoing.sequence_number = m_top_level_traversable.next_sequence_number();
+@@ -2554,6 +2619,11 @@ bool ViewImplementation::did_cancel_navigation(Optional<Utf16String> const& navi
+     if (stale)
+         return false;
+ 
++    if (m_trusted_embedder_messaging_navigation_id.has_value()) {
++        m_trusted_embedder_messaging_navigation_id.clear();
++        m_trusted_embedder_message_callback = { };
++    }
++
+     set_loading_state(false);
+     if (cancel_uncommitted_top_level_navigation("did-cancel-navigation"sv, false))
+         return true;
+diff --git a/Libraries/LibWebView/ViewImplementation.h b/Libraries/LibWebView/ViewImplementation.h
+index 536455e0..7c1da49b 100644
+--- a/Libraries/LibWebView/ViewImplementation.h
++++ b/Libraries/LibWebView/ViewImplementation.h
+@@ -74,6 +74,7 @@
+ #include <LibWebView/Settings.h>
+ #include <LibWebView/StorageSetResult.h>
+ #include <LibWebView/TabPerformanceStats.h>
++#include <LibWebView/TrustedEmbedderMessaging.h>
+ #include <LibWebView/WebContentClient.h>
+ #include <LibWebView/WebContentPage.h>
+ #include <LibWebView/WebDriverSessionConfig.h>
+@@ -138,6 +139,9 @@ public:
+     void open_url_in_new_window(URL::URL const&, IsPrivate);
+     void set_next_history_visit_transition(HistoryVisitTransition transition) { m_history_visit_transition_for_next_load = transition; }
+     void load_html(StringView);
++    ErrorOr<void> enable_trusted_embedder_messaging(TrustedEmbedderMessageCallback, TrustedEmbedderMessagingLimits = { });
++    ErrorOr<void> send_trusted_embedder_message(TrustedEmbedderMessage const&);
++    void disable_trusted_embedder_messaging();
+     void load_navigation_error_page(StringView);
+ 
+     void reload();
+@@ -545,6 +549,8 @@ protected:
+ 
+     explicit ViewImplementation(IsPrivate = IsPrivate::No);
+ 
++    ErrorOr<void> connect_trusted_embedder_messaging(Utf16String const& navigation_id, WebContentPage&);
++
+     void set_url(URL::URL);
+     void did_start_navigation(Optional<Utf16String> navigation_id, URL::URL const&);
+     void did_cancel_loading(Optional<Utf16String> const& navigation_id);
+@@ -559,7 +565,7 @@ protected:
+         Load,
+         HistoryTraversal,
+     };
+-    u64 begin_webdriver_navigation(WebDriverNavigationCompletionSource, Optional<Web::HTML::CrossProcessId> history_operation_id = {});
++    u64 begin_webdriver_navigation(WebDriverNavigationCompletionSource, Optional<Web::HTML::CrossProcessId> history_operation_id = { });
+     void complete_webdriver_navigation(u64 navigation_id);
+     void complete_webdriver_history_traversal(Web::HTML::CrossProcessId operation_id);
+     void update_navigation_action_state();
+@@ -569,7 +575,7 @@ protected:
+         Always,
+     };
+     void dump_session_history(StringView reason, SessionHistoryDumpMode = SessionHistoryDumpMode::IfDebuggingEnabled) const;
+-    void recover_current_session_history_entry_with_history_operation(RefPtr<WebContentPage> crashed_endpoint = {});
++    void recover_current_session_history_entry_with_history_operation(RefPtr<WebContentPage> crashed_endpoint = { });
+     void reconstruct_current_session_history_entry_with_history_operation(StringView reason);
+     enum class ReconstructCanceledNavigation {
+         No,
+@@ -783,6 +789,13 @@ protected:
+     size_t m_crash_count = 0;
+     RefPtr<Core::Timer> m_repeated_crash_timer;
+ 
++    TrustedEmbedderMessageCallback m_trusted_embedder_message_callback;
++    TrustedEmbedderMessagingLimits m_trusted_embedder_messaging_limits;
++    RefPtr<TrustedEmbedderMessagingChannel> m_trusted_embedder_messaging_channel;
++    Optional<Utf16String> m_trusted_embedder_messaging_navigation_id;
++    bool m_trusted_embedder_messaging_armed { false };
++    u64 m_trusted_embedder_messaging_generation { 0 };
++
+     RefPtr<Core::Promise<LexicalPath>> m_pending_screenshot;
+     RefPtr<Core::Promise<String>> m_pending_info_request;
+ 
+diff --git a/Libraries/LibWebView/WebContentPage.cpp b/Libraries/LibWebView/WebContentPage.cpp
+index f7134948..e41c277a 100644
+--- a/Libraries/LibWebView/WebContentPage.cpp
++++ b/Libraries/LibWebView/WebContentPage.cpp
+@@ -1848,6 +1848,11 @@ void WebContentPage::did_finish_loading(Web::HTML::CrossProcessId navigable_id,
+         return;
+     }
+ 
++    if (navigation_id.has_value()) {
++        if (auto result = view().connect_trusted_embedder_messaging(*navigation_id, *this); result.is_error())
++            dbgln("Unable to connect trusted embedder messaging: {}", result.error());
++    }
++
+     if (displays_tab()) {
+         auto const& committed_url = view().url();
+ 
+diff --git a/Services/WebContent/CMakeLists.txt b/Services/WebContent/CMakeLists.txt
+index 3893ffd3..d88bcc37 100644
+--- a/Services/WebContent/CMakeLists.txt
++++ b/Services/WebContent/CMakeLists.txt
+@@ -6,6 +6,7 @@ set(SOURCES
+     PageClient.cpp
+     PageHost.cpp
+     TestConnection.cpp
++    TrustedEmbedderMessagingConnection.cpp
+     WebContentCompositorHost.cpp
+     WebContentConsoleClient.cpp
+     WebDriverConnection.cpp
+diff --git a/Services/WebContent/ConnectionFromClient.cpp b/Services/WebContent/ConnectionFromClient.cpp
+index 2366e3c2..bc735602 100644
+--- a/Services/WebContent/ConnectionFromClient.cpp
++++ b/Services/WebContent/ConnectionFromClient.cpp
+@@ -444,6 +444,14 @@ void ConnectionFromClient::connect_to_web_ui(Compositing::PageId page_id, IPC::T
+     }
+ }
+ 
++void ConnectionFromClient::connect_trusted_embedder_messaging(Compositing::PageId page_id, Utf16String navigation_id, u64 generation, IPC::TransportHandle handle)
++{
++    if (auto page = this->page(page_id); page.has_value()) {
++        if (auto result = page->connect_trusted_embedder_messaging(move(navigation_id), generation, move(handle)); result.is_error())
++            dbgln("Unable to connect trusted embedder messaging: {}", result.error());
++    }
++}
++
+ void ConnectionFromClient::connect_to_image_decoder(IPC::TransportHandle handle)
+ {
+     if (on_image_decoder_connection)
+diff --git a/Services/WebContent/ConnectionFromClient.h b/Services/WebContent/ConnectionFromClient.h
+index f08c41e1..86abfaba 100644
+--- a/Services/WebContent/ConnectionFromClient.h
++++ b/Services/WebContent/ConnectionFromClient.h
+@@ -106,6 +106,7 @@ private:
+     virtual void run_webdriver_command(Compositing::PageId page_id, u64 command_id, Optional<Web::HTML::CrossProcessId> navigable_id, String name, JsonValue payload, Vector<String> arguments) override;
+     virtual void set_webdriver_session_config(Compositing::PageId page_id, Web::WebDriver::UserPromptHandler user_prompt_handler, Web::WebDriver::PageLoadStrategy page_load_strategy, bool strict_file_interactability, JsonValue timeouts) override;
+     virtual void run_webdriver_user_prompt_handling(Compositing::PageId page_id, u64 request_id) override;
++    virtual void connect_trusted_embedder_messaging(Compositing::PageId page_id, Utf16String navigation_id, u64 generation, IPC::TransportHandle handle) override;
+     virtual void did_handle_webdriver_mouse_event(Compositing::PageId page_id, u64 request_id) override;
+     virtual void connect_to_web_ui(Compositing::PageId page_id, IPC::TransportHandle handle) override;
+     virtual void connect_to_request_server(IPC::TransportHandle handle) override;
+diff --git a/Services/WebContent/PageClient.cpp b/Services/WebContent/PageClient.cpp
+index a9f3b9d1..84296226 100644
+--- a/Services/WebContent/PageClient.cpp
++++ b/Services/WebContent/PageClient.cpp
+@@ -65,6 +65,7 @@
+ #include <WebContent/PageClient.h>
+ #include <WebContent/PageHost.h>
+ #include <WebContent/TestConnection.h>
++#include <WebContent/TrustedEmbedderMessagingConnection.h>
+ #include <WebContent/WebContentClientEndpoint.h>
+ #include <WebContent/WebDriverConnection.h>
+ #include <WebContent/WebUIConnection.h>
+@@ -176,6 +177,8 @@ void PageClient::visit_edges(JS::Cell::Visitor& visitor)
+         visitor.visit(pending_mouse_event.value);
+     if (m_web_ui)
+         m_web_ui->visit_edges(visitor);
++    if (m_trusted_embedder_messaging)
++        m_trusted_embedder_messaging->visit_edges(visitor);
+ }
+ 
+ ConnectionFromClient& PageClient::client() const
+@@ -925,6 +928,10 @@ void PageClient::page_did_change_active_document_in_top_level_browsing_context(W
+ 
+     clear_pending_dom_mutations();
+ 
++    m_last_completed_top_level_navigation_id.clear();
++    if (m_trusted_embedder_messaging && &m_trusted_embedder_messaging->document() != &document)
++        m_trusted_embedder_messaging.clear();
++
+     if (m_web_ui && &m_web_ui->document() != &document)
+         m_web_ui.clear();
+ 
+@@ -939,6 +946,8 @@ void PageClient::page_did_change_active_document_in_top_level_browsing_context(W
+ 
+ void PageClient::page_did_finish_loading(Web::HTML::CrossProcessId navigable_id, Optional<Utf16String> const& navigation_id)
+ {
++    if (page().has_local_traversable() && navigable_id == page().local_traversable()->id())
++        m_last_completed_top_level_navigation_id = navigation_id;
+     client().async_did_finish_loading(m_id, navigable_id, navigation_id);
+ }
+ 
+@@ -1883,12 +1892,51 @@ ErrorOr<void> PageClient::connect_to_web_ui(IPC::TransportHandle handle)
+ {
+     auto active_document = page().local_traversable()->active_document();
+     if (!active_document || !active_document->window())
+-        return {};
++        return { };
+ 
+     VERIFY(!m_web_ui);
+     m_web_ui = TRY(WebUIConnection::connect(move(handle), *active_document));
+ 
+-    return {};
++    return { };
++}
++
++ErrorOr<void> PageClient::connect_trusted_embedder_messaging(Utf16String const& navigation_id, u64 generation, IPC::TransportHandle handle)
++{
++    if (generation <= m_trusted_embedder_messaging_generation
++        || !m_last_completed_top_level_navigation_id.has_value()
++        || *m_last_completed_top_level_navigation_id != navigation_id
++        || !page().has_local_traversable())
++        return Error::from_string_literal("Trusted embedder messaging authorization is stale");
++
++    auto active_document = page().local_traversable()->active_document();
++    if (!active_document || !active_document->window() || !active_document->is_fully_active())
++        return Error::from_string_literal("No active top-level document for trusted embedder messaging");
++
++    m_trusted_embedder_messaging.clear();
++    m_trusted_embedder_messaging = TRY(TrustedEmbedderMessagingConnection::connect(move(handle), *active_document, generation));
++    m_trusted_embedder_messaging_generation = generation;
++    return { };
++}
++
++bool PageClient::send_trusted_embedder_message(String const& type, JsonValue payload)
++{
++    if (!m_trusted_embedder_messaging || !m_trusted_embedder_messaging->is_active() || !page().has_local_traversable())
++        return false;
++    auto active_document = page().local_traversable()->active_document();
++    if (!active_document || active_document.ptr() != &m_trusted_embedder_messaging->document())
++        return false;
++    m_trusted_embedder_messaging->post_message_from_document(type, move(payload));
++    return true;
++}
++
++String PageClient::take_trusted_embedder_messages(Web::DOM::Document const& document)
++{
++    if (!m_trusted_embedder_messaging || !m_trusted_embedder_messaging->is_active() || !page().has_local_traversable())
++        return "[]"_string;
++    auto active_document = page().local_traversable()->active_document();
++    if (!active_document || active_document.ptr() != &document || active_document.ptr() != &m_trusted_embedder_messaging->document())
++        return "[]"_string;
++    return m_trusted_embedder_messaging->take_messages().serialized();
+ }
+ 
+ void PageClient::received_message_from_web_ui(Utf16String const& name, JS::Value data)
+diff --git a/Services/WebContent/PageClient.h b/Services/WebContent/PageClient.h
+index 83942365..671ea5b9 100644
+--- a/Services/WebContent/PageClient.h
++++ b/Services/WebContent/PageClient.h
+@@ -36,6 +36,8 @@
+ #include <LibWebView/Mutation.h>
+ #include <LibWebView/StorageSetResult.h>
+ #include <WebContent/Forward.h>
++#include <WebContent/TrustedEmbedderMessagingClientEndpoint.h>
++#include <WebContent/TrustedEmbedderMessagingServerEndpoint.h>
+ 
+ namespace WebContent {
+ 
+@@ -66,6 +68,9 @@ public:
+     void webdriver_command_complete(u64 command_id, Web::WebDriver::Response);
+     void set_webdriver_session_config(Web::WebDriver::UserPromptHandler, Web::WebDriver::PageLoadStrategy, bool strict_file_interactability, JsonValue const& timeouts);
+     ErrorOr<void> connect_to_web_ui(IPC::TransportHandle);
++    ErrorOr<void> connect_trusted_embedder_messaging(Utf16String const& navigation_id, u64 generation, IPC::TransportHandle);
++    bool send_trusted_embedder_message(String const& type, JsonValue payload) override;
++    String take_trusted_embedder_messages(Web::DOM::Document const&) override;
+ 
+     virtual Queue<Web::QueuedInputEvent>& input_event_queue() override;
+     virtual void did_handle_input_event(Compositing::PageId page_id, Web::InputEvent const&) override;
+@@ -385,6 +390,9 @@ private:
+     HashMap<u64, GC::Ref<GC::Function<void()>>> m_pending_webdriver_mouse_events;
+     u64 m_next_webdriver_mouse_event_request_id { 0 };
+     RefPtr<WebUIConnection> m_web_ui;
++    RefPtr<class TrustedEmbedderMessagingConnection> m_trusted_embedder_messaging;
++    Optional<Utf16String> m_last_completed_top_level_navigation_id;
++    u64 m_trusted_embedder_messaging_generation { 0 };
+ 
+     GC::Ptr<WebContentConsoleClient> m_top_level_document_console_client;
+ 
+diff --git a/Services/WebContent/TrustedEmbedderMessagingClient.ipc b/Services/WebContent/TrustedEmbedderMessagingClient.ipc
+new file mode 100644
+index 00000000..e9a638ea
+--- /dev/null
++++ b/Services/WebContent/TrustedEmbedderMessagingClient.ipc
+@@ -0,0 +1,3 @@
++endpoint TrustedEmbedderMessagingClient {
++    received_message(u64 generation, String type, JsonValue payload) =|
++}
+diff --git a/Services/WebContent/TrustedEmbedderMessagingConnection.cpp b/Services/WebContent/TrustedEmbedderMessagingConnection.cpp
+new file mode 100644
+index 00000000..fc838fad
+--- /dev/null
++++ b/Services/WebContent/TrustedEmbedderMessagingConnection.cpp
+@@ -0,0 +1,140 @@
++/*
++ * Copyright (c) 2026-present, the Ladybird developers.
++ *
++ * SPDX-License-Identifier: BSD-2-Clause
++ */
++
++#include <AK/JsonArray.h>
++#include <AK/JsonObject.h>
++#include <AK/NeverDestroyed.h>
++#include <LibGC/Heap.h>
++#include <LibJS/Runtime/PropertyAttributes.h>
++#include <LibWeb/Bindings/PlatformObject.h>
++#include <LibWeb/Bindings/Wrappable.h>
++#include <LibWeb/Bindings/WrapperWorld.h>
++#include <LibWeb/DOM/CustomEvent.h>
++#include <LibWeb/DOM/Document.h>
++#include <LibWeb/DOM/Event.h>
++#include <LibWeb/HTML/LocalNavigable.h>
++#include <LibWeb/HTML/Scripting/Environments.h>
++#include <LibWeb/HTML/Scripting/TemporaryExecutionContext.h>
++#include <LibWeb/HTML/Window.h>
++#include <LibWeb/Internals/TrustedEmbedderMessaging.h>
++#include <LibWeb/WebDriver/JSON.h>
++#include <WebContent/TrustedEmbedderMessagingConnection.h>
++
++namespace WebContent {
++
++static JS::PropertyKey const& embedder_messaging_property()
++{
++    static NeverDestroyed<JS::PropertyKey> property { "embedderMessaging"_utf16_fly_string };
++    return *property;
++}
++
++static FlyString const& embedder_message_event()
++{
++    static NeverDestroyed<FlyString> event { "TrustedEmbedderMessageAvailable"_fly_string };
++    return *event;
++}
++
++ErrorOr<NonnullRefPtr<TrustedEmbedderMessagingConnection>> TrustedEmbedderMessagingConnection::connect(IPC::TransportHandle handle, Web::DOM::Document& document, u64 generation)
++{
++    auto transport = TRY(handle.create_transport());
++    return adopt_ref(*new TrustedEmbedderMessagingConnection(move(transport), document, generation));
++}
++
++TrustedEmbedderMessagingConnection::TrustedEmbedderMessagingConnection(NonnullOwnPtr<IPC::Transport> transport, Web::DOM::Document& document, u64 generation)
++    : IPC::ConnectionFromClient<TrustedEmbedderMessagingClientEndpoint, TrustedEmbedderMessagingServerEndpoint>(*this, move(transport), 1)
++    , m_document(document)
++    , m_generation(generation)
++{
++    auto& realm = m_document->relevant_settings_object().realm();
++    auto& window = Web::HTML::relevant_window(realm.global_object());
++    JS::PropertyAttributes attributes = JS::default_attributes;
++    attributes.set_writable(false);
++    realm.global_object().define_direct_property(embedder_messaging_property(), Web::Bindings::wrap(Web::Bindings::host_defined_wrapper_world(realm), realm, Web::Internals::TrustedEmbedderMessaging::create(window)), attributes);
++}
++
++TrustedEmbedderMessagingConnection::~TrustedEmbedderMessagingConnection()
++{
++    revoke();
++}
++
++void TrustedEmbedderMessagingConnection::die()
++{
++    revoke();
++}
++
++void TrustedEmbedderMessagingConnection::revoke()
++{
++    if (!m_is_active)
++        return;
++    m_is_active = false;
++    m_queued_messages.clear();
++    m_queued_message_bytes = 0;
++    if (m_document->window())
++        (void)m_document->relevant_settings_object().realm().global_object().internal_delete(embedder_messaging_property());
++}
++
++void TrustedEmbedderMessagingConnection::visit_edges(JS::Cell::Visitor& visitor)
++{
++    visitor.visit(m_document);
++}
++
++void TrustedEmbedderMessagingConnection::post_message_from_document(String type, JsonValue payload)
++{
++    if (!m_is_active || !m_document->browsing_context() || !m_document->is_fully_active())
++        return;
++    auto const serialized_payload = payload.serialized();
++    if (type.is_empty() || type.bytes().size() > 128 || serialized_payload.bytes().size() > 64 * 1024)
++        return;
++    async_received_message(m_generation, move(type), move(payload));
++}
++
++void TrustedEmbedderMessagingConnection::send_message(u64 generation, String type, JsonValue payload)
++{
++    if (!m_is_active || generation != m_generation || !m_document->browsing_context() || !m_document->is_fully_active())
++        return;
++    auto navigable = m_document->navigable();
++    if (!navigable || !navigable->is_top_level_traversable())
++        return;
++    auto local_navigable = as_if<Web::HTML::LocalNavigable>(navigable.ptr());
++    if (!local_navigable || local_navigable->active_document().ptr() != m_document.ptr())
++        return;
++    auto serialized_payload = payload.serialized();
++    if (type.is_empty() || type.bytes().size() > 128 || serialized_payload.bytes().size() > 64 * 1024)
++        return;
++
++    auto serialized_size = type.bytes().size() + serialized_payload.bytes().size();
++    constexpr size_t maximum_queued_messages = 64;
++    constexpr size_t maximum_queued_message_bytes = 1024 * 1024;
++    if (serialized_size > maximum_queued_message_bytes)
++        return;
++    while (!m_queued_messages.is_empty()
++        && (m_queued_messages.size() >= maximum_queued_messages || m_queued_message_bytes + serialized_size > maximum_queued_message_bytes)) {
++        m_queued_message_bytes -= m_queued_messages.first().serialized_size;
++        m_queued_messages.remove(0);
++    }
++    m_queued_message_bytes += serialized_size;
++    m_queued_messages.append({ move(type), move(payload), serialized_size });
++
++    auto& realm = m_document->relevant_settings_object().realm();
++    Web::HTML::TemporaryExecutionContext context { realm };
++    m_document->dispatch_event(Web::DOM::Event::create(realm.global_object(), embedder_message_event()));
++}
++
++JsonArray TrustedEmbedderMessagingConnection::take_messages()
++{
++    JsonArray messages;
++    for (auto& queued_message : m_queued_messages) {
++        JsonObject message;
++        message.set("type"sv, move(queued_message.type));
++        message.set("payload"sv, move(queued_message.payload));
++        MUST(messages.append(move(message)));
++    }
++    m_queued_messages.clear();
++    m_queued_message_bytes = 0;
++    return messages;
++}
++
++}
+diff --git a/Services/WebContent/TrustedEmbedderMessagingConnection.h b/Services/WebContent/TrustedEmbedderMessagingConnection.h
+new file mode 100644
+index 00000000..30155801
+--- /dev/null
++++ b/Services/WebContent/TrustedEmbedderMessagingConnection.h
+@@ -0,0 +1,54 @@
++/*
++ * Copyright (c) 2026-present, the Ladybird developers.
++ *
++ * SPDX-License-Identifier: BSD-2-Clause
++ */
++
++#pragma once
++
++#include <AK/JsonValue.h>
++#include <AK/NonnullRefPtr.h>
++#include <AK/Utf16String.h>
++#include <AK/Vector.h>
++#include <LibGC/Ptr.h>
++#include <LibIPC/ConnectionFromClient.h>
++#include <LibIPC/Transport.h>
++#include <LibJS/Heap/Cell.h>
++#include <LibWeb/Forward.h>
++#include <WebContent/TrustedEmbedderMessagingClientEndpoint.h>
++#include <WebContent/TrustedEmbedderMessagingServerEndpoint.h>
++
++namespace WebContent {
++
++class TrustedEmbedderMessagingConnection final
++    : public IPC::ConnectionFromClient<TrustedEmbedderMessagingClientEndpoint, TrustedEmbedderMessagingServerEndpoint> {
++public:
++    static ErrorOr<NonnullRefPtr<TrustedEmbedderMessagingConnection>> connect(IPC::TransportHandle, Web::DOM::Document&, u64 generation);
++    virtual ~TrustedEmbedderMessagingConnection() override;
++
++    void visit_edges(JS::Cell::Visitor&);
++    void post_message_from_document(String type, JsonValue payload);
++    JsonArray take_messages();
++    bool is_active() const { return m_is_active; }
++    Web::DOM::Document const& document() const { return m_document; }
++    u64 generation() const { return m_generation; }
++
++private:
++    TrustedEmbedderMessagingConnection(NonnullOwnPtr<IPC::Transport>, Web::DOM::Document&, u64 generation);
++    virtual void die() override;
++    void revoke();
++    virtual void send_message(u64 generation, String type, JsonValue payload) override;
++
++    GC::Ref<Web::DOM::Document> m_document;
++    u64 m_generation { 0 };
++    struct QueuedMessage {
++        String type;
++        JsonValue payload;
++        size_t serialized_size { 0 };
++    };
++    Vector<QueuedMessage> m_queued_messages;
++    size_t m_queued_message_bytes { 0 };
++    bool m_is_active { true };
++};
++
++}
+diff --git a/Services/WebContent/TrustedEmbedderMessagingServer.ipc b/Services/WebContent/TrustedEmbedderMessagingServer.ipc
+new file mode 100644
+index 00000000..cc6e42a3
+--- /dev/null
++++ b/Services/WebContent/TrustedEmbedderMessagingServer.ipc
+@@ -0,0 +1,3 @@
++endpoint TrustedEmbedderMessagingServer {
++    send_message(u64 generation, String type, JsonValue payload) =|
++}
+diff --git a/Services/WebContent/WebContentServer.ipc b/Services/WebContent/WebContentServer.ipc
+index c199fa17..e420ead1 100644
+--- a/Services/WebContent/WebContentServer.ipc
++++ b/Services/WebContent/WebContentServer.ipc
+@@ -73,6 +73,7 @@ endpoint WebContentServer routed by Compositing::PageId page_id
+     run_webdriver_command(Compositing::PageId page_id, u64 command_id, Optional<Web::HTML::CrossProcessId> navigable_id, String name, JsonValue payload, Vector<String> arguments) =|
+     run_webdriver_user_prompt_handling(Compositing::PageId page_id, u64 request_id) =|
+     did_handle_webdriver_mouse_event(Compositing::PageId page_id, u64 request_id) =|
++    connect_trusted_embedder_messaging(Compositing::PageId page_id, Utf16String navigation_id, u64 generation, IPC::TransportHandle handle) =|
+     set_webdriver_session_config(Compositing::PageId page_id, Web::WebDriver::UserPromptHandler user_prompt_handler, Web::WebDriver::PageLoadStrategy page_load_strategy, bool strict_file_interactability, JsonValue timeouts) =|
+     connect_to_web_ui(Compositing::PageId page_id, IPC::TransportHandle handle) =|
+     connect_to_request_server(IPC::TransportHandle handle) =|

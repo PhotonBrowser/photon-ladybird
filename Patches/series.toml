@@ -53,3 +53,9 @@ id = "0009"
 file = "ladybird/0009-pointer-capture.patch"
 description = "Implement DOM pointer capture for mouse input"
 area = "Input handling"
+
+[[patches]]
+id = "0010"
+file = "ladybird/0010-add-trusted-embedder-messaging-channel.patch"
+description = "Add trusted embedder messaging channel"
+area = "WebContent integration"
