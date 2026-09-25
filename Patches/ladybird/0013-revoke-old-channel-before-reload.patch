@@ -1,0 +1,46 @@
+--- a/Libraries/LibWebView/ViewImplementation.cpp
++++ b/Libraries/LibWebView/ViewImplementation.cpp
+@@ -383,16 +383,19 @@
+     auto trusted_embedder_messaging_authorized_for_navigation = m_trusted_embedder_messaging_armed
+         && m_trusted_embedder_messaging_expected_navigation_url.has_value()
+         && *m_trusted_embedder_messaging_expected_navigation_url == url;
+-    trusted_embedder_messaging_authorized_for_navigation |= m_trusted_embedder_messaging_reload_url.has_value()
++    auto trusted_reload_authorized = m_trusted_embedder_messaging_reload_url.has_value()
+         && *m_trusted_embedder_messaging_reload_url == url
+         && m_trusted_embedder_messaging_channel
+         && m_trusted_embedder_messaging_channel->is_connected();
++    trusted_embedder_messaging_authorized_for_navigation |= trusted_reload_authorized;
+     if (!trusted_embedder_messaging_authorized_for_navigation && m_trusted_embedder_messaging_reload_url.has_value()) {
+         dbgln("TrustedEmbedderMessaging AUTH revoke view={} reason=embedder-load url={}", m_view_id, url);
+         m_trusted_embedder_messaging_reload_url.clear();
+         m_trusted_embedder_message_callback = { };
+         m_trusted_embedder_messaging_channel = nullptr;
+     }
++    if (trusted_reload_authorized)
++        m_trusted_embedder_messaging_channel = nullptr;
+ 
+     if (m_trusted_embedder_messaging_armed || m_trusted_embedder_messaging_navigation_id.has_value()) {
+         m_trusted_embedder_messaging_armed = false;
+@@ -2652,10 +2655,12 @@
+             && m_trusted_embedder_messaging_channel->is_connected()) {
+             m_trusted_embedder_messaging_navigation_id = navigation_id;
+             dbgln("TrustedEmbedderMessaging AUTH reload view={} navigation={} url={}", m_view_id, *navigation_id, url);
++            m_trusted_embedder_messaging_channel = nullptr;
+         } else {
+             dbgln("TrustedEmbedderMessaging AUTH revoke view={} reason=untrusted-navigation url={}", m_view_id, url);
+             m_trusted_embedder_messaging_reload_url.clear();
+             m_trusted_embedder_message_callback = { };
++            m_trusted_embedder_messaging_channel = nullptr;
+         }
+     }
+     if (m_trusted_embedder_messaging_navigation_id.has_value()
+--- a/Services/WebContent/TrustedEmbedderMessagingConnection.cpp
++++ b/Services/WebContent/TrustedEmbedderMessagingConnection.cpp
+@@ -55,6 +55,7 @@
+     attributes.set_writable(false);
+     realm.global_object().define_direct_property(embedder_messaging_property(), Web::Bindings::wrap(Web::Bindings::host_defined_wrapper_world(realm), realm, Web::Internals::TrustedEmbedderMessaging::create(window)), attributes);
+     dbgln("TrustedEmbedderMessaging JS binding install document={} generation={}", reinterpret_cast<uintptr_t>(&document), generation);
++    Web::HTML::TemporaryExecutionContext context { realm };
+     document.dispatch_event(Web::DOM::Event::create(realm.global_object(), "TrustedEmbedderMessagingReady"_fly_string));
+ }
+ 

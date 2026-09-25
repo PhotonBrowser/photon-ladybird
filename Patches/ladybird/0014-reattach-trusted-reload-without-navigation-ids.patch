@@ -1,0 +1,237 @@
+--- a/Libraries/LibWebView/ViewImplementation.cpp
++++ b/Libraries/LibWebView/ViewImplementation.cpp
+@@ -393,6 +393,7 @@
+         m_trusted_embedder_messaging_reload_url.clear();
+         m_trusted_embedder_message_callback = { };
+         m_trusted_embedder_messaging_channel = nullptr;
++        m_trusted_embedder_messaging_reload_pending = false;
+     }
+     if (trusted_reload_authorized)
+         m_trusted_embedder_messaging_channel = nullptr;
+@@ -505,6 +506,7 @@
+     set_loading_state(true);
+     auto navigation_id = generate_navigation_id();
+     m_trusted_embedder_messaging_channel = nullptr;
++    m_trusted_embedder_messaging_reload_pending = false;
+     m_trusted_embedder_messaging_navigation_id = m_trusted_embedder_messaging_armed && !m_trusted_embedder_messaging_expected_navigation_url.has_value()
+         ? Optional<Utf16String> { navigation_id }
+         : Optional<Utf16String> { };
+@@ -570,15 +572,19 @@
+     m_trusted_embedder_messaging_expected_navigation_url.clear();
+     m_trusted_embedder_message_callback = { };
+     m_trusted_embedder_messaging_reload_url.clear();
++    m_trusted_embedder_messaging_reload_pending = false;
+     m_trusted_embedder_messaging_channel = nullptr;
+ }
+ 
+ ErrorOr<void> ViewImplementation::connect_trusted_embedder_messaging(Utf16String const& navigation_id, WebContentPage& page)
+ {
+-    if (!m_trusted_embedder_messaging_navigation_id.has_value() || *m_trusted_embedder_messaging_navigation_id != navigation_id)
++    auto is_navigation_match = m_trusted_embedder_messaging_navigation_id.has_value() && *m_trusted_embedder_messaging_navigation_id == navigation_id;
++    auto is_trusted_reload_without_id = navigation_id.is_empty() && m_trusted_embedder_messaging_reload_pending && m_trusted_embedder_messaging_reload_url.has_value();
++    if (!is_navigation_match && !is_trusted_reload_without_id)
+         return { };
+ 
+     m_trusted_embedder_messaging_navigation_id.clear();
++    m_trusted_embedder_messaging_reload_pending = false;
+     if (!m_trusted_embedder_message_callback)
+         return Error::from_string_literal("Trusted embedder messaging callback was cleared before document activation");
+ 
+@@ -588,8 +594,9 @@
+         if (m_trusted_embedder_message_callback)
+             m_trusted_embedder_message_callback(move(message));
+     };
++    auto expected_document_url = is_trusted_reload_without_id ? m_trusted_embedder_messaging_reload_url : Optional<URL::URL> {};
+     m_trusted_embedder_messaging_channel = TRY(TrustedEmbedderMessagingChannel::create(
+-        client(), page.id(), navigation_id, generation,
++        client(), page.id(), navigation_id, expected_document_url, generation,
+         move(callback), m_trusted_embedder_messaging_limits));
+     dbgln("TrustedEmbedderMessaging CHANNEL attach view={} navigation={} generation={}", m_view_id, navigation_id, generation);
+     return { };
+@@ -2644,23 +2651,27 @@
+ 
+ void ViewImplementation::did_start_navigation(Optional<Utf16String> navigation_id, URL::URL const& url)
+ {
+-    dbgln("TrustedEmbedderMessaging NAV start view={} navigation={} url={}", m_view_id, navigation_id.value_or("<none>"_utf16), url);
++    if (navigation_id.has_value())
++        dbgln("TrustedEmbedderMessaging NAV start view={} navigation={} url={}", m_view_id, *navigation_id, url);
++    else
++        dbgln("TrustedEmbedderMessaging NAV start view={} navigation=<none> url={}", m_view_id, url);
+     auto is_initially_authorized_navigation = m_trusted_embedder_messaging_navigation_id.has_value()
+         && navigation_id.has_value()
+         && *m_trusted_embedder_messaging_navigation_id == *navigation_id;
+     if (!is_initially_authorized_navigation && m_trusted_embedder_messaging_reload_url.has_value()) {
+-        if (navigation_id.has_value()
+-            && *m_trusted_embedder_messaging_reload_url == url
++        if (*m_trusted_embedder_messaging_reload_url == url
+             && m_trusted_embedder_messaging_channel
+             && m_trusted_embedder_messaging_channel->is_connected()) {
++            m_trusted_embedder_messaging_reload_pending = true;
+             m_trusted_embedder_messaging_navigation_id = navigation_id;
+-            dbgln("TrustedEmbedderMessaging AUTH reload view={} navigation={} url={}", m_view_id, *navigation_id, url);
++            dbgln("TrustedEmbedderMessaging AUTH reload view={} navigation={} url={}", m_view_id, navigation_id.has_value() ? *navigation_id : "<none>"_utf16, url);
+             m_trusted_embedder_messaging_channel = nullptr;
+         } else {
+             dbgln("TrustedEmbedderMessaging AUTH revoke view={} reason=untrusted-navigation url={}", m_view_id, url);
+             m_trusted_embedder_messaging_reload_url.clear();
+             m_trusted_embedder_message_callback = { };
+             m_trusted_embedder_messaging_channel = nullptr;
++            m_trusted_embedder_messaging_reload_pending = false;
+         }
+     }
+     if (m_trusted_embedder_messaging_navigation_id.has_value()
+@@ -2692,10 +2703,13 @@
+     if (stale)
+         return false;
+ 
+-    if (m_trusted_embedder_messaging_navigation_id.has_value()) {
++    if (m_trusted_embedder_messaging_navigation_id.has_value() || m_trusted_embedder_messaging_reload_pending) {
+         m_trusted_embedder_messaging_navigation_id.clear();
+         m_trusted_embedder_messaging_expected_navigation_url.clear();
+         m_trusted_embedder_message_callback = { };
++        m_trusted_embedder_messaging_reload_url.clear();
++        m_trusted_embedder_messaging_reload_pending = false;
++        m_trusted_embedder_messaging_channel = nullptr;
+     }
+ 
+     set_loading_state(false);
+--- a/Libraries/LibWebView/ViewImplementation.h
++++ b/Libraries/LibWebView/ViewImplementation.h
+@@ -792,6 +792,7 @@
+ 
+     TrustedEmbedderMessageCallback m_trusted_embedder_message_callback;
+     Optional<URL::URL> m_trusted_embedder_messaging_reload_url;
++    bool m_trusted_embedder_messaging_reload_pending { false };
+     TrustedEmbedderMessagingLimits m_trusted_embedder_messaging_limits;
+     Optional<URL::URL> m_trusted_embedder_messaging_expected_navigation_url;
+     RefPtr<TrustedEmbedderMessagingChannel> m_trusted_embedder_messaging_channel;
+--- a/Libraries/LibWebView/WebContentPage.cpp
++++ b/Libraries/LibWebView/WebContentPage.cpp
+@@ -1847,10 +1847,9 @@
+         return;
+     }
+ 
+-    if (navigation_id.has_value()) {
+-        if (auto result = view().connect_trusted_embedder_messaging(*navigation_id, *this); result.is_error())
+-            dbgln("Unable to connect trusted embedder messaging: {}", result.error());
+-    }
++    auto trusted_messaging_navigation_id = navigation_id.value_or(Utf16String {});
++    if (auto result = view().connect_trusted_embedder_messaging(trusted_messaging_navigation_id, *this); result.is_error())
++        dbgln("Unable to connect trusted embedder messaging: {}", result.error());
+ 
+     if (displays_tab()) {
+         auto const& committed_url = view().url();
+--- a/Services/WebContent/ConnectionFromClient.cpp
++++ b/Services/WebContent/ConnectionFromClient.cpp
+@@ -444,10 +444,10 @@
+     }
+ }
+ 
+-void ConnectionFromClient::connect_trusted_embedder_messaging(Compositing::PageId page_id, Utf16String navigation_id, u64 generation, IPC::TransportHandle handle)
++void ConnectionFromClient::connect_trusted_embedder_messaging(Compositing::PageId page_id, Utf16String navigation_id, Optional<URL::URL> expected_document_url, u64 generation, IPC::TransportHandle handle)
+ {
+     if (auto page = this->page(page_id); page.has_value()) {
+-        if (auto result = page->connect_trusted_embedder_messaging(move(navigation_id), generation, move(handle)); result.is_error())
++        if (auto result = page->connect_trusted_embedder_messaging(move(navigation_id), move(expected_document_url), generation, move(handle)); result.is_error())
+             dbgln("Unable to connect trusted embedder messaging: {}", result.error());
+     }
+ }
+--- a/Services/WebContent/ConnectionFromClient.h
++++ b/Services/WebContent/ConnectionFromClient.h
+@@ -106,7 +106,7 @@
+     virtual void run_webdriver_command(Compositing::PageId page_id, u64 command_id, Optional<Web::HTML::CrossProcessId> navigable_id, String name, JsonValue payload, Vector<String> arguments) override;
+     virtual void set_webdriver_session_config(Compositing::PageId page_id, Web::WebDriver::UserPromptHandler user_prompt_handler, Web::WebDriver::PageLoadStrategy page_load_strategy, bool strict_file_interactability, JsonValue timeouts) override;
+     virtual void run_webdriver_user_prompt_handling(Compositing::PageId page_id, u64 request_id) override;
+-    virtual void connect_trusted_embedder_messaging(Compositing::PageId page_id, Utf16String navigation_id, u64 generation, IPC::TransportHandle handle) override;
++    virtual void connect_trusted_embedder_messaging(Compositing::PageId page_id, Utf16String navigation_id, Optional<URL::URL> expected_document_url, u64 generation, IPC::TransportHandle handle) override;
+     virtual void did_handle_webdriver_mouse_event(Compositing::PageId page_id, u64 request_id) override;
+     virtual void connect_to_web_ui(Compositing::PageId page_id, IPC::TransportHandle handle) override;
+     virtual void connect_to_request_server(IPC::TransportHandle handle) override;
+--- a/Services/WebContent/PageClient.cpp
++++ b/Services/WebContent/PageClient.cpp
+@@ -1900,17 +1900,22 @@
+     return { };
+ }
+ 
+-ErrorOr<void> PageClient::connect_trusted_embedder_messaging(Utf16String const& navigation_id, u64 generation, IPC::TransportHandle handle)
++ErrorOr<void> PageClient::connect_trusted_embedder_messaging(Utf16String const& navigation_id, Optional<URL::URL> expected_document_url, u64 generation, IPC::TransportHandle handle)
+ {
+-    if (generation <= m_trusted_embedder_messaging_generation
+-        || !m_last_completed_top_level_navigation_id.has_value()
+-        || *m_last_completed_top_level_navigation_id != navigation_id
+-        || !page().has_local_traversable())
++    if (generation <= m_trusted_embedder_messaging_generation || !page().has_local_traversable())
+         return Error::from_string_literal("Trusted embedder messaging authorization is stale");
+ 
+     auto active_document = page().local_traversable()->active_document();
+     if (!active_document || !active_document->window() || !active_document->is_fully_active())
+         return Error::from_string_literal("No active top-level document for trusted embedder messaging");
++    auto is_navigation_authorized = !navigation_id.is_empty()
++        && m_last_completed_top_level_navigation_id.has_value()
++        && *m_last_completed_top_level_navigation_id == navigation_id;
++    auto is_url_scoped_reload = navigation_id.is_empty()
++        && expected_document_url.has_value()
++        && active_document->url() == *expected_document_url;
++    if (!is_navigation_authorized && !is_url_scoped_reload)
++        return Error::from_string_literal("Trusted embedder messaging authorization does not match the active document");
+ 
+     m_trusted_embedder_messaging.clear();
+     m_trusted_embedder_messaging = TRY(TrustedEmbedderMessagingConnection::connect(move(handle), *active_document, generation));
+--- a/Services/WebContent/PageClient.h
++++ b/Services/WebContent/PageClient.h
+@@ -68,7 +68,7 @@
+     void webdriver_command_complete(u64 command_id, Web::WebDriver::Response);
+     void set_webdriver_session_config(Web::WebDriver::UserPromptHandler, Web::WebDriver::PageLoadStrategy, bool strict_file_interactability, JsonValue const& timeouts);
+     ErrorOr<void> connect_to_web_ui(IPC::TransportHandle);
+-    ErrorOr<void> connect_trusted_embedder_messaging(Utf16String const& navigation_id, u64 generation, IPC::TransportHandle);
++    ErrorOr<void> connect_trusted_embedder_messaging(Utf16String const& navigation_id, Optional<URL::URL> expected_document_url, u64 generation, IPC::TransportHandle);
+     bool send_trusted_embedder_message(String const& type, JsonValue payload) override;
+     String take_trusted_embedder_messages(Web::DOM::Document const&) override;
+ 
+--- a/Services/WebContent/WebContentServer.ipc
++++ b/Services/WebContent/WebContentServer.ipc
+@@ -73,7 +73,7 @@
+     run_webdriver_command(Compositing::PageId page_id, u64 command_id, Optional<Web::HTML::CrossProcessId> navigable_id, String name, JsonValue payload, Vector<String> arguments) =|
+     run_webdriver_user_prompt_handling(Compositing::PageId page_id, u64 request_id) =|
+     did_handle_webdriver_mouse_event(Compositing::PageId page_id, u64 request_id) =|
+-    connect_trusted_embedder_messaging(Compositing::PageId page_id, Utf16String navigation_id, u64 generation, IPC::TransportHandle handle) =|
++    connect_trusted_embedder_messaging(Compositing::PageId page_id, Utf16String navigation_id, Optional<URL::URL> expected_document_url, u64 generation, IPC::TransportHandle handle) =|
+     set_webdriver_session_config(Compositing::PageId page_id, Web::WebDriver::UserPromptHandler user_prompt_handler, Web::WebDriver::PageLoadStrategy page_load_strategy, bool strict_file_interactability, JsonValue timeouts) =|
+     connect_to_web_ui(Compositing::PageId page_id, IPC::TransportHandle handle) =|
+     connect_to_request_server(IPC::TransportHandle handle) =|
+--- a/Libraries/LibWebView/TrustedEmbedderMessaging.cpp
++++ b/Libraries/LibWebView/TrustedEmbedderMessaging.cpp
+@@ -12,12 +12,12 @@
+ namespace WebView {
+ 
+ ErrorOr<NonnullRefPtr<TrustedEmbedderMessagingChannel>> TrustedEmbedderMessagingChannel::create(
+-    WebContentClient& client, Compositing::PageId page_id, Utf16String navigation_id, u64 generation,
++    WebContentClient& client, Compositing::PageId page_id, Utf16String navigation_id, Optional<URL::URL> expected_document_url, u64 generation,
+     TrustedEmbedderMessageCallback callback, TrustedEmbedderMessagingLimits limits)
+ {
+     auto paired = TRY(IPC::Transport::create_paired());
+     auto channel = adopt_ref(*new TrustedEmbedderMessagingChannel(move(paired.local), generation, move(callback), limits));
+-    client.async_connect_trusted_embedder_messaging(page_id, move(navigation_id), generation, move(paired.remote_handle));
++    client.async_connect_trusted_embedder_messaging(page_id, move(navigation_id), move(expected_document_url), generation, move(paired.remote_handle));
+     return channel;
+ }
+ 
+--- a/Libraries/LibWebView/TrustedEmbedderMessaging.h
++++ b/Libraries/LibWebView/TrustedEmbedderMessaging.h
+@@ -17,6 +17,7 @@
+ #include <LibIPC/ConnectionToServer.h>
+ #include <LibIPC/Transport.h>
+ #include <LibWebView/Export.h>
++#include <LibURL/URL.h>
+ #include <WebContent/TrustedEmbedderMessagingClientEndpoint.h>
+ #include <WebContent/TrustedEmbedderMessagingServerEndpoint.h>
+ 
+@@ -41,7 +42,7 @@
+     , public TrustedEmbedderMessagingClientEndpoint {
+ public:
+     static ErrorOr<NonnullRefPtr<TrustedEmbedderMessagingChannel>> create(
+-        WebContentClient&, Compositing::PageId, Utf16String navigation_id, u64 generation,
++        WebContentClient&, Compositing::PageId, Utf16String navigation_id, Optional<URL::URL> expected_document_url, u64 generation,
+         TrustedEmbedderMessageCallback, TrustedEmbedderMessagingLimits);
+     virtual ~TrustedEmbedderMessagingChannel() override;
+ 

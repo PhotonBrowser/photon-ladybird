@@ -1,0 +1,74 @@
+--- a/Libraries/LibWebView/ViewImplementation.cpp
++++ b/Libraries/LibWebView/ViewImplementation.cpp
+@@ -389,7 +389,6 @@
+         && m_trusted_embedder_messaging_channel->is_connected();
+     trusted_embedder_messaging_authorized_for_navigation |= trusted_reload_authorized;
+     if (!trusted_embedder_messaging_authorized_for_navigation && m_trusted_embedder_messaging_reload_url.has_value()) {
+-        dbgln("TrustedEmbedderMessaging AUTH revoke view={} reason=embedder-load url={}", m_view_id, url);
+         m_trusted_embedder_messaging_reload_url.clear();
+         m_trusted_embedder_message_callback = { };
+         m_trusted_embedder_messaging_channel = nullptr;
+@@ -589,7 +588,6 @@
+         return Error::from_string_literal("Trusted embedder messaging callback was cleared before document activation");
+ 
+     auto generation = ++m_trusted_embedder_messaging_generation;
+-    dbgln("TrustedEmbedderMessaging CHANNEL create view={} navigation={} generation={}", m_view_id, navigation_id, generation);
+     auto callback = [this](TrustedEmbedderMessage message) {
+         if (m_trusted_embedder_message_callback)
+             m_trusted_embedder_message_callback(move(message));
+@@ -598,7 +596,6 @@
+     m_trusted_embedder_messaging_channel = TRY(TrustedEmbedderMessagingChannel::create(
+         client(), page.id(), navigation_id, expected_document_url, generation,
+         move(callback), m_trusted_embedder_messaging_limits));
+-    dbgln("TrustedEmbedderMessaging CHANNEL attach view={} navigation={} generation={}", m_view_id, navigation_id, generation);
+     return { };
+ }
+ 
+@@ -2651,10 +2648,6 @@
+ 
+ void ViewImplementation::did_start_navigation(Optional<Utf16String> navigation_id, URL::URL const& url)
+ {
+-    if (navigation_id.has_value())
+-        dbgln("TrustedEmbedderMessaging NAV start view={} navigation={} url={}", m_view_id, *navigation_id, url);
+-    else
+-        dbgln("TrustedEmbedderMessaging NAV start view={} navigation=<none> url={}", m_view_id, url);
+     auto is_initially_authorized_navigation = m_trusted_embedder_messaging_navigation_id.has_value()
+         && navigation_id.has_value()
+         && *m_trusted_embedder_messaging_navigation_id == *navigation_id;
+@@ -2664,10 +2657,8 @@
+             && m_trusted_embedder_messaging_channel->is_connected()) {
+             m_trusted_embedder_messaging_reload_pending = true;
+             m_trusted_embedder_messaging_navigation_id = navigation_id;
+-            dbgln("TrustedEmbedderMessaging AUTH reload view={} navigation={} url={}", m_view_id, navigation_id.has_value() ? *navigation_id : "<none>"_utf16, url);
+             m_trusted_embedder_messaging_channel = nullptr;
+         } else {
+-            dbgln("TrustedEmbedderMessaging AUTH revoke view={} reason=untrusted-navigation url={}", m_view_id, url);
+             m_trusted_embedder_messaging_reload_url.clear();
+             m_trusted_embedder_message_callback = { };
+             m_trusted_embedder_messaging_channel = nullptr;
+--- a/Services/WebContent/TrustedEmbedderMessagingConnection.cpp
++++ b/Services/WebContent/TrustedEmbedderMessagingConnection.cpp
+@@ -6,7 +6,6 @@
+ 
+ #include <AK/JsonArray.h>
+ #include <AK/JsonObject.h>
+-#include <AK/Debug.h>
+ #include <AK/NeverDestroyed.h>
+ #include <LibGC/Heap.h>
+ #include <LibJS/Runtime/PropertyAttributes.h>
+@@ -54,7 +53,6 @@
+     JS::PropertyAttributes attributes = JS::default_attributes;
+     attributes.set_writable(false);
+     realm.global_object().define_direct_property(embedder_messaging_property(), Web::Bindings::wrap(Web::Bindings::host_defined_wrapper_world(realm), realm, Web::Internals::TrustedEmbedderMessaging::create(window)), attributes);
+-    dbgln("TrustedEmbedderMessaging JS binding install document={} generation={}", reinterpret_cast<uintptr_t>(&document), generation);
+     Web::HTML::TemporaryExecutionContext context { realm };
+     document.dispatch_event(Web::DOM::Event::create(realm.global_object(), "TrustedEmbedderMessagingReady"_fly_string));
+ }
+@@ -74,7 +72,6 @@
+     if (!m_is_active)
+         return;
+     m_is_active = false;
+-    dbgln("TrustedEmbedderMessaging CHANNEL detach document={} generation={}", reinterpret_cast<uintptr_t>(m_document.ptr()), m_generation);
+     m_queued_messages.clear();
+     m_queued_message_bytes = 0;
+     if (m_document->window())

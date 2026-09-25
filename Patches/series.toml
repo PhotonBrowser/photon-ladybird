@@ -65,3 +65,28 @@ id = "0011"
 file = "ladybird/0011-authorize-trusted-messaging-for-development-navigation.patch"
 description = "Authorize trusted messaging for development navigation"
 area = "WebContent integration"
+
+[[patches]]
+id = "0012"
+file = "ladybird/0012-stabilize-trusted-messaging-lifecycle.patch"
+description = "stabilize trusted messaging lifecycle"
+area = "WebContent integration"
+
+[[patches]]
+id = "0013"
+file = "ladybird/0013-revoke-old-channel-before-reload.patch"
+description = "revoke old channel before reload"
+area = "WebContent integration"
+
+[[patches]]
+id = "0014"
+file = "ladybird/0014-reattach-trusted-reload-without-navigation-ids.patch"
+description = "reattach trusted reload without navigation IDs"
+area = "WebContent integration"
+
+[[patches]]
+id = "0015"
+file = "ladybird/0015-remove-temporary-messaging-lifecycle-traces.patch"
+description = "remove temporary messaging lifecycle traces"
+area = "WebContent integration"
+

@@ -1,0 +1,147 @@
+--- a/Libraries/LibWebView/ViewImplementation.cpp
++++ b/Libraries/LibWebView/ViewImplementation.cpp
+@@ -383,13 +383,25 @@
+     auto trusted_embedder_messaging_authorized_for_navigation = m_trusted_embedder_messaging_armed
+         && m_trusted_embedder_messaging_expected_navigation_url.has_value()
+         && *m_trusted_embedder_messaging_expected_navigation_url == url;
++    trusted_embedder_messaging_authorized_for_navigation |= m_trusted_embedder_messaging_reload_url.has_value()
++        && *m_trusted_embedder_messaging_reload_url == url
++        && m_trusted_embedder_messaging_channel
++        && m_trusted_embedder_messaging_channel->is_connected();
++    if (!trusted_embedder_messaging_authorized_for_navigation && m_trusted_embedder_messaging_reload_url.has_value()) {
++        dbgln("TrustedEmbedderMessaging AUTH revoke view={} reason=embedder-load url={}", m_view_id, url);
++        m_trusted_embedder_messaging_reload_url.clear();
++        m_trusted_embedder_message_callback = { };
++        m_trusted_embedder_messaging_channel = nullptr;
++    }
+ 
+     if (m_trusted_embedder_messaging_armed || m_trusted_embedder_messaging_navigation_id.has_value()) {
+         m_trusted_embedder_messaging_armed = false;
+         m_trusted_embedder_messaging_navigation_id.clear();
+         m_trusted_embedder_messaging_expected_navigation_url.clear();
+-        if (!trusted_embedder_messaging_authorized_for_navigation)
++        if (!trusted_embedder_messaging_authorized_for_navigation) {
+             m_trusted_embedder_message_callback = { };
++            m_trusted_embedder_messaging_reload_url.clear();
++        }
+     }
+ 
+     if (on_before_browser_initiated_navigation)
+@@ -514,6 +526,7 @@
+         return Error::from_string_literal("Trusted embedder messaging is already armed for a load");
+ 
+     m_trusted_embedder_message_callback = move(callback);
++    m_trusted_embedder_messaging_reload_url = URL::about_srcdoc();
+     m_trusted_embedder_messaging_limits.maximum_serialized_message_size = min(limits.maximum_serialized_message_size, 64 * 1024);
+     m_trusted_embedder_messaging_limits.maximum_type_size = min(limits.maximum_type_size, 128);
+     m_trusted_embedder_messaging_armed = true;
+@@ -531,6 +544,7 @@
+         return Error::from_string_literal("Trusted embedder messaging is already armed for a load");
+ 
+     m_trusted_embedder_message_callback = move(callback);
++    m_trusted_embedder_messaging_reload_url = expected_url;
+     m_trusted_embedder_messaging_limits.maximum_serialized_message_size = min(limits.maximum_serialized_message_size, 64 * 1024);
+     m_trusted_embedder_messaging_limits.maximum_type_size = min(limits.maximum_type_size, 128);
+     m_trusted_embedder_messaging_armed = true;
+@@ -552,6 +566,7 @@
+     m_trusted_embedder_messaging_navigation_id.clear();
+     m_trusted_embedder_messaging_expected_navigation_url.clear();
+     m_trusted_embedder_message_callback = { };
++    m_trusted_embedder_messaging_reload_url.clear();
+     m_trusted_embedder_messaging_channel = nullptr;
+ }
+ 
+@@ -565,9 +580,15 @@
+         return Error::from_string_literal("Trusted embedder messaging callback was cleared before document activation");
+ 
+     auto generation = ++m_trusted_embedder_messaging_generation;
++    dbgln("TrustedEmbedderMessaging CHANNEL create view={} navigation={} generation={}", m_view_id, navigation_id, generation);
++    auto callback = [this](TrustedEmbedderMessage message) {
++        if (m_trusted_embedder_message_callback)
++            m_trusted_embedder_message_callback(move(message));
++    };
+     m_trusted_embedder_messaging_channel = TRY(TrustedEmbedderMessagingChannel::create(
+         client(), page.id(), navigation_id, generation,
+-        move(m_trusted_embedder_message_callback), m_trusted_embedder_messaging_limits));
++        move(callback), m_trusted_embedder_messaging_limits));
++    dbgln("TrustedEmbedderMessaging CHANNEL attach view={} navigation={} generation={}", m_view_id, navigation_id, generation);
+     return { };
+ }
+ 
+@@ -2620,11 +2641,29 @@
+ 
+ void ViewImplementation::did_start_navigation(Optional<Utf16String> navigation_id, URL::URL const& url)
+ {
++    dbgln("TrustedEmbedderMessaging NAV start view={} navigation={} url={}", m_view_id, navigation_id.value_or("<none>"_utf16), url);
++    auto is_initially_authorized_navigation = m_trusted_embedder_messaging_navigation_id.has_value()
++        && navigation_id.has_value()
++        && *m_trusted_embedder_messaging_navigation_id == *navigation_id;
++    if (!is_initially_authorized_navigation && m_trusted_embedder_messaging_reload_url.has_value()) {
++        if (navigation_id.has_value()
++            && *m_trusted_embedder_messaging_reload_url == url
++            && m_trusted_embedder_messaging_channel
++            && m_trusted_embedder_messaging_channel->is_connected()) {
++            m_trusted_embedder_messaging_navigation_id = navigation_id;
++            dbgln("TrustedEmbedderMessaging AUTH reload view={} navigation={} url={}", m_view_id, *navigation_id, url);
++        } else {
++            dbgln("TrustedEmbedderMessaging AUTH revoke view={} reason=untrusted-navigation url={}", m_view_id, url);
++            m_trusted_embedder_messaging_reload_url.clear();
++            m_trusted_embedder_message_callback = { };
++        }
++    }
+     if (m_trusted_embedder_messaging_navigation_id.has_value()
+         && (!navigation_id.has_value() || *m_trusted_embedder_messaging_navigation_id != *navigation_id)) {
+         m_trusted_embedder_messaging_navigation_id.clear();
+         m_trusted_embedder_messaging_expected_navigation_url.clear();
+         m_trusted_embedder_message_callback = { };
++        m_trusted_embedder_messaging_reload_url.clear();
+     }
+ 
+     auto& ongoing = m_top_level_traversable.ensure_ongoing_navigation();
+--- a/Libraries/LibWebView/ViewImplementation.h
++++ b/Libraries/LibWebView/ViewImplementation.h
+@@ -791,6 +791,7 @@
+     RefPtr<Core::Timer> m_repeated_crash_timer;
+ 
+     TrustedEmbedderMessageCallback m_trusted_embedder_message_callback;
++    Optional<URL::URL> m_trusted_embedder_messaging_reload_url;
+     TrustedEmbedderMessagingLimits m_trusted_embedder_messaging_limits;
+     Optional<URL::URL> m_trusted_embedder_messaging_expected_navigation_url;
+     RefPtr<TrustedEmbedderMessagingChannel> m_trusted_embedder_messaging_channel;
+--- a/Libraries/LibWebView/TrustedEmbedderMessaging.h
++++ b/Libraries/LibWebView/TrustedEmbedderMessaging.h
+@@ -46,6 +46,7 @@
+     virtual ~TrustedEmbedderMessagingChannel() override;
+ 
+     ErrorOr<void> send(TrustedEmbedderMessage const&);
++    bool is_connected() const { return static_cast<bool>(m_callback); }
+ 
+ private:
+     TrustedEmbedderMessagingChannel(NonnullOwnPtr<IPC::Transport>, u64, TrustedEmbedderMessageCallback, TrustedEmbedderMessagingLimits);
+--- a/Services/WebContent/TrustedEmbedderMessagingConnection.cpp
++++ b/Services/WebContent/TrustedEmbedderMessagingConnection.cpp
+@@ -6,6 +6,7 @@
+ 
+ #include <AK/JsonArray.h>
+ #include <AK/JsonObject.h>
++#include <AK/Debug.h>
+ #include <AK/NeverDestroyed.h>
+ #include <LibGC/Heap.h>
+ #include <LibJS/Runtime/PropertyAttributes.h>
+@@ -53,6 +54,8 @@
+     JS::PropertyAttributes attributes = JS::default_attributes;
+     attributes.set_writable(false);
+     realm.global_object().define_direct_property(embedder_messaging_property(), Web::Bindings::wrap(Web::Bindings::host_defined_wrapper_world(realm), realm, Web::Internals::TrustedEmbedderMessaging::create(window)), attributes);
++    dbgln("TrustedEmbedderMessaging JS binding install document={} generation={}", reinterpret_cast<uintptr_t>(&document), generation);
++    document.dispatch_event(Web::DOM::Event::create(realm.global_object(), "TrustedEmbedderMessagingReady"_fly_string));
+ }
+ 
+ TrustedEmbedderMessagingConnection::~TrustedEmbedderMessagingConnection()
+@@ -70,6 +73,7 @@
+     if (!m_is_active)
+         return;
+     m_is_active = false;
++    dbgln("TrustedEmbedderMessaging CHANNEL detach document={} generation={}", reinterpret_cast<uintptr_t>(m_document.ptr()), m_generation);
+     m_queued_messages.clear();
+     m_queued_message_bytes = 0;
+     if (m_document->window())
