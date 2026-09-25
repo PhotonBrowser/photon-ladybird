@@ -39,7 +39,7 @@ const snapshotFromDevServer = (): BrowserSnapshot | undefined => {
 
 let snapshot = window.__photonInitialState ?? snapshotFromDevServer() ?? developmentSnapshot;
 const listeners = new Set<(state: BrowserSnapshot) => void>();
-const nativeBridgeAvailable = window.__photonInitialState !== undefined || searchParams.has("photonInitialState");
+const nativeBridgeAvailable = window.__photonInitialState !== undefined || window.embedderMessaging !== undefined;
 const platform = window.__photonPlatform ?? (searchParams.get("photonPlatform") === "macos" ? "macos" : "other");
 
 const commandTransport = createPhotonCommandTransport(nativeBridgeAvailable);

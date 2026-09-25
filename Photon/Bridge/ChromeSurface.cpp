@@ -57,40 +57,30 @@ void ChromeSurface::load(BrowserView const& browser)
             || url.port() != 5173)
             return;
         m_dev_server_origin = url;
-        m_trusted_document_loaded = true;
-        QUrlQuery query(url);
-        query.addQueryItem(QStringLiteral("photonInitialState"), QString::fromUtf8(initial_state));
-#ifdef Q_OS_MACOS
-        query.addQueryItem(QStringLiteral("photonPlatform"), QStringLiteral("macos"));
-#else
-        query.addQueryItem(QStringLiteral("photonPlatform"), QStringLiteral("other"));
-#endif
-        url.setQuery(query);
-        auto parsed_url = ak_url_from_qstring(url.toString());
-        if (!parsed_url.has_value())
-            return;
-        m_view->load(parsed_url.release_value());
-        return;
     }
 
-    auto html = resource(QStringLiteral(":/Photon/WebUI/dist/index.html"));
-    if (html.isEmpty())
-        return;
+    QByteArray html;
+    if (m_dev_server_origin.isEmpty()) {
+        html = resource(QStringLiteral(":/Photon/WebUI/dist/index.html"));
+        if (html.isEmpty())
+            return;
+    }
 
-    auto head_end = html.indexOf("</head>");
-    if (head_end < 0)
-        return;
+    if (m_dev_server_origin.isEmpty()) {
+        auto head_end = html.indexOf("</head>");
+        if (head_end < 0)
+            return;
 #ifdef Q_OS_MACOS
-    auto platform = QByteArrayLiteral("macos");
+        auto platform = QByteArrayLiteral("macos");
 #else
-    auto platform = QByteArrayLiteral("other");
+        auto platform = QByteArrayLiteral("other");
 #endif
-    auto initial_state_base64 = initial_state.toBase64();
-    auto initial_state_script = QByteArrayLiteral("<script>window.__photonInitialState=JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('")
-        + initial_state_base64
-        + QByteArrayLiteral("'), c => c.charCodeAt(0))));window.__photonPlatform='") + platform + QByteArrayLiteral("';</script>");
-    html.insert(head_end, initial_state_script);
-    auto document = QString::fromUtf8(html).toUtf8();
+        auto initial_state_base64 = initial_state.toBase64();
+        auto initial_state_script = QByteArrayLiteral("<script>window.__photonInitialState=JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('")
+            + initial_state_base64
+            + QByteArrayLiteral("'), c => c.charCodeAt(0))));window.__photonPlatform='") + platform + QByteArrayLiteral("';</script>");
+        html.insert(head_end, initial_state_script);
+    }
     auto channel_result = m_view->enable_trusted_embedder_messaging([this](WebView::TrustedEmbedderMessage message) {
         if (!m_trusted_document_loaded || !on_command)
             return;
@@ -103,9 +93,27 @@ void ChromeSurface::load(BrowserView const& browser)
     });
     if (channel_result.is_error())
         dbgln("Unable to enable Photon trusted message channel: {}", channel_result.error());
-    m_trusted_document_loaded = true;
+    m_trusted_document_loaded = !channel_result.is_error();
     m_trusted_load_html_navigation_pending = true;
-    m_view->load_html({ document.constData(), static_cast<size_t>(document.size()) });
+    if (m_dev_server_origin.isEmpty()) {
+        m_view->load_html({ html.constData(), static_cast<size_t>(html.size()) });
+        return;
+    }
+
+    QUrl url = m_dev_server_origin;
+    QUrlQuery query(url);
+    query.addQueryItem(QStringLiteral("photonInitialState"), QString::fromUtf8(initial_state));
+#ifdef Q_OS_MACOS
+    query.addQueryItem(QStringLiteral("photonPlatform"), QStringLiteral("macos"));
+#else
+    query.addQueryItem(QStringLiteral("photonPlatform"), QStringLiteral("other"));
+#endif
+    url.setQuery(query);
+    auto parsed_url = ak_url_from_qstring(url.toString());
+    if (!parsed_url.has_value())
+        return;
+    m_trusted_load_html_navigation_pending = false;
+    m_view->load(parsed_url.release_value());
 }
 
 void ChromeSurface::update_state(BrowserView const& browser)
