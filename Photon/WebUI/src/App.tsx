@@ -70,6 +70,11 @@ export default function App({ api }: AppProps): React.JSX.Element {
         setActiveOverlay(null);
     }, [activeOverlay, activeTabKey, api]);
 
+    useLayoutEffect(() => {
+        if (activeTab?.internalPage !== "new-tab") return;
+        addressInput.current?.focus();
+    }, [activeTab?.id, activeTab?.internalPage]);
+
     useEffect(() => {
         let showTimer = 0;
         const clearTooltip = (): void => {
