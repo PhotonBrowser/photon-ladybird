@@ -33,6 +33,7 @@ pub(crate) enum AppCommand<'a> {
     SetTheme(ThemeMode),
     SetForceDarkPages(bool),
     SetDimOverlays(bool),
+    SetWindowTintOpacity(u8),
     Navigate(&'a str),
     Reload,
     Back,
@@ -134,6 +135,10 @@ impl PhotonApp {
             }
             AppCommand::SetDimOverlays(enabled) => {
                 effects.state_changed = self.browser.set_dim_overlays(enabled);
+                effects.accepted = effects.state_changed;
+            }
+            AppCommand::SetWindowTintOpacity(opacity) => {
+                effects.state_changed = self.browser.set_window_tint_opacity(opacity);
                 effects.accepted = effects.state_changed;
             }
             AppCommand::Navigate(input) => {

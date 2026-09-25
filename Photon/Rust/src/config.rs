@@ -14,6 +14,7 @@ pub(crate) struct PhotonConfig {
     pub(crate) theme_mode: ThemeMode,
     pub(crate) force_dark_pages: bool,
     pub(crate) dim_overlays: bool,
+    pub(crate) window_tint_opacity: u8,
 }
 
 impl Default for PhotonConfig {
@@ -22,6 +23,7 @@ impl Default for PhotonConfig {
             theme_mode: ThemeMode::System,
             force_dark_pages: false,
             dim_overlays: false,
+            window_tint_opacity: 95,
         }
     }
 }

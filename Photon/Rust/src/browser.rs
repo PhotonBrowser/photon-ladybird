@@ -60,6 +60,7 @@ pub(crate) struct BrowserState {
     theme_mode: ThemeMode,
     force_dark_pages: bool,
     dim_overlays: bool,
+    window_tint_opacity: u8,
     config_path: Option<PathBuf>,
 }
 
@@ -90,6 +91,7 @@ impl BrowserState {
             theme_mode: config.theme_mode,
             force_dark_pages: config.force_dark_pages,
             dim_overlays: config.dim_overlays,
+            window_tint_opacity: config.window_tint_opacity.min(100),
             config_path,
         }
     }
@@ -100,6 +102,7 @@ impl BrowserState {
                 theme_mode: self.theme_mode,
                 force_dark_pages: self.force_dark_pages,
                 dim_overlays: self.dim_overlays,
+                window_tint_opacity: self.window_tint_opacity,
             }
             .save(path);
         }
@@ -188,6 +191,16 @@ impl BrowserState {
             return false;
         }
         self.dim_overlays = enabled;
+        self.save_config();
+        true
+    }
+
+    pub(crate) fn set_window_tint_opacity(&mut self, opacity: u8) -> bool {
+        let opacity = opacity.min(100);
+        if self.window_tint_opacity == opacity {
+            return false;
+        }
+        self.window_tint_opacity = opacity;
         self.save_config();
         true
     }
@@ -366,8 +379,8 @@ impl BrowserState {
             ThemeMode::Dark => "dark",
         };
         format!(
-            "{{\"tabs\":[{tabs}],\"activeTabId\":\"tab-{}\",\"themeMode\":\"{theme_mode}\",\"forceDarkPages\":{},\"dimOverlays\":{}}}",
-            self.active_tab_id, self.force_dark_pages, self.dim_overlays
+            "{{\"tabs\":[{tabs}],\"activeTabId\":\"tab-{}\",\"themeMode\":\"{theme_mode}\",\"forceDarkPages\":{},\"dimOverlays\":{},\"windowTintOpacity\":{}}}",
+            self.active_tab_id, self.force_dark_pages, self.dim_overlays, self.window_tint_opacity
         )
     }
 }
@@ -600,7 +613,7 @@ mod tests {
         let state = BrowserState::initial();
         assert_eq!(
             state.snapshot_json(),
-            "{\"tabs\":[{\"id\":\"tab-1\",\"url\":\"photon://newtab\",\"title\":\"New Tab\",\"faviconUrl\":null,\"internalPage\":\"new-tab\",\"loading\":false,\"canGoBack\":false,\"canGoForward\":false}],\"activeTabId\":\"tab-1\",\"themeMode\":\"system\",\"forceDarkPages\":false,\"dimOverlays\":false}"
+            "{\"tabs\":[{\"id\":\"tab-1\",\"url\":\"photon://newtab\",\"title\":\"New Tab\",\"faviconUrl\":null,\"internalPage\":\"new-tab\",\"loading\":false,\"canGoBack\":false,\"canGoForward\":false}],\"activeTabId\":\"tab-1\",\"themeMode\":\"system\",\"forceDarkPages\":false,\"dimOverlays\":false,\"windowTintOpacity\":95}"
         );
     }
 

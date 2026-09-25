@@ -92,6 +92,7 @@ enum PhotonAppCommandKind {
     SelectNextTab = 15,
     FocusAddress = 16,
     PageClosed = 17,
+    SetWindowTintOpacity = 18,
 }
 
 impl TryFrom<u32> for PhotonAppCommandKind {
@@ -116,6 +117,7 @@ impl TryFrom<u32> for PhotonAppCommandKind {
             15 => Ok(Self::SelectNextTab),
             16 => Ok(Self::FocusAddress),
             17 => Ok(Self::PageClosed),
+            18 => Ok(Self::SetWindowTintOpacity),
             _ => Err(()),
         }
     }
@@ -238,6 +240,15 @@ pub unsafe extern "C" fn photon_app_dispatch(
             1 => true,
             _ => return PhotonAppEffects::default(),
         }),
+        PhotonAppCommandKind::SetWindowTintOpacity => {
+            let Ok(opacity) = u8::try_from(command.value) else {
+                return PhotonAppEffects::default();
+            };
+            if opacity > 100 {
+                return PhotonAppEffects::default();
+            }
+            AppCommand::SetWindowTintOpacity(opacity)
+        }
         PhotonAppCommandKind::Navigate => {
             let Some(input) = (unsafe { input_utf8(command.argument.data, command.argument.len) }) else {
                 return PhotonAppEffects::default();

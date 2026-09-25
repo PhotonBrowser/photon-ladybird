@@ -70,6 +70,7 @@ enum PhotonAppCommandKind {
     PhotonAppCommandKind_SelectNextTab = 15,
     PhotonAppCommandKind_FocusAddress = 16,
     PhotonAppCommandKind_PageClosed = 17,
+    PhotonAppCommandKind_SetWindowTintOpacity = 18,
 };
 
 PhotonBrowserState* photon_browser_state_new(uint8_t const* config_path, size_t config_path_len);
