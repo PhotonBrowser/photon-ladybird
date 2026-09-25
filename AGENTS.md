@@ -46,7 +46,7 @@ Both surfaces use Ladybird WebContent views, but they are separate documents and
 | Persistent browser state | `Photon/Rust`; tabs, preferences, and Photon settings are serialized into snapshots. |
 | Actual webpage navigation and engine state | Ladybird; callbacks update Rust state. Do not treat submitted address text as confirmed state. |
 | Transient UI and overlays | React owns the open overlay, focus, and editing state. It sends a narrow capture-open/close command for overlays that must intercept page input; native keeps only the capture bit required by its input router. |
-| Navigation and privileged commands | WebUI calls `window.photon`; `ChromeSurface` intercepts `photon-command://`, validates operation and arguments, and dispatches through Photon browser state/bridge. |
+| Navigation and privileged commands | WebUI calls `window.photon`; its typed transport uses the trusted view-scoped embedder message channel. Photon validates messages and dispatches browser/application commands through Rust, with Qt operations kept native. |
 | Overlay appearance | React DOM/CSS owns popovers and scrims, including layering and dimming. |
 | Input routing | `WindowScene` routes pointer and wheel input to chrome or page as described below; Qt/Ladybird handles focused keyboard input. |
 | Native integration | `Photon/Bridge` creates/views, connects Ladybird callbacks, owns window lifecycle and composition. |
@@ -54,8 +54,8 @@ Both surfaces use Ladybird WebContent views, but they are separate documents and
 ### Security boundary
 
 - `PageSurface` content is hostile and untrusted. It must never receive `window.photon`, browser state, filesystem access, native objects, or equivalent privileged APIs.
-- `ChromeSurface` loads trusted bundled Photon application code. Its commands use the fixed allowlist and validated arguments in `ChromeSurface::is_allowed_command`.
-- Arbitrary top-level navigation from the trusted chrome document is canceled. The one production command transport is `photon-command://`; development permits only the pinned `http://127.0.0.1:5173` Vite origin. Do not let a navigated website retain chrome privileges.
+- `ChromeSurface` loads trusted bundled Photon application code. Its native message callback passes through `PhotonCommandTransport`'s fixed command allowlist and argument validation.
+- The native messaging capability is explicitly enabled for the bundled trusted chrome view, bound to its committed top-level document, and revoked when that document is replaced. Arbitrary top-level navigation from chrome is canceled; development permits only the pinned `http://127.0.0.1:5173` Vite origin, which has no native command capability. Do not let a navigated website retain chrome privileges.
 - The bundled chrome currently uses Ladybird's internal `load_html` path rather than a dedicated chrome origin. Keep the trusted document loading path narrow and do not broaden privileged APIs based on that internal-origin limitation.
 - No generic `eval`, JSON-RPC, arbitrary native invocation, or website-facing bridge is allowed.
 
@@ -89,7 +89,7 @@ npm run format:check
 npm run build
 ```
 
-`npm run format` writes formatting changes. Dependencies and build tooling belong in `package.json`/lockfile; do not add a runtime Node dependency, SSR framework, or large state-management framework without a concrete need. Only the trusted chrome document receives `window.photon`.
+`npm run format` writes formatting changes. Dependencies and build tooling belong in `package.json`/lockfile; do not add a runtime Node dependency, SSR framework, or large state-management framework without a concrete need. Ordinary webpages receive neither `window.photon` nor the native messaging binding. The development Vite page may expose the public TypeScript API for UI iteration but has no native command capability.
 
 ## Input routing and focus
 
@@ -116,10 +116,10 @@ The invariant is:
 canonical Ladybird source = recorded pristine upstream
 
 Build/Source or .photon/worktree
-    = recorded pristine upstream + ordered registered Photon patch series
+    = recorded pristine upstream + ordered enabled Photon patches
 ```
 
-`./photon patches check` must enforce that invariant against `Meta/Photon/upstream.toml`, including a clean application of the complete ordered series and exact equality of generated build sources. It must fail on any unrepresented direct or committed canonical Ladybird modification. Generated build trees must stop rather than overwrite unexpected edits.
+`./photon patches check` must enforce that invariant against `Meta/Photon/upstream.toml`, including a clean application of the complete enabled series and exact equality of generated build sources. Patches are enabled by default; `./photon patches enable ID` and `./photon patches disable ID` toggle individual registered patches. The CLI resets and reapplies the series in existing generated trees only after verifying they have no uncaptured edits, preserving build directories for incremental rebuilds. It must fail on any unrepresented direct or committed canonical Ladybird modification. Generated build trees must stop rather than overwrite unexpected edits.
 
 When an engine change is necessary:
 

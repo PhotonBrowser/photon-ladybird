@@ -1,99 +1,58 @@
-# Photon command bridge audit
+# Photon bridge audit
 
-This records the bridge before transport restructuring. It describes the trusted React WebUI path; ordinary page views are separate Ladybird `WebContentView` instances.
+This document describes the current Photon bridge and records the retired command-URL transport for migration history. Photon chrome and ordinary web content remain separate Ladybird `WebContentView` instances.
 
-## Baseline command flow before typed transport preparation
+## Current command path
 
 ```text
 React components
-    │ typed public methods in PhotonApi
-    ▼
-Photon/WebUI/src/main.tsx
-    │ string command name + optional string value
-    │ window.location.href = photon-command://…
-    ▼
-ChromeSurface::handle_navigation_request
-    │ top-level navigation hook, installed on ChromeSurface's view only
-    │ URL shape + command + argument validation
-    ▼
-PhotonWindow callback
-    ├── BrowserView ── C ABI ── Rust BrowserState / BrowserCommand ── Ladybird WebContentView
-    ├── Rust-backed preference methods via BrowserView ── Qt color scheme / React state event
-    ├── WindowScene overlay capture bit
-    └── Qt QWidget/QWindow window operations
+    ↓
+window.photon typed API
+    ↓
+PhotonCommandTransport
+    ↓
+trusted view-scoped embedder messaging
+    ↓ Ladybird IPC
+ChromeSurface → typed PhotonCommand decoder
+    ↓
+PhotonWindow dispatcher
+    ├── PhotonApp (Rust) → AppEffects → BrowserView/Ladybird executor
+    ├── WindowScene / Qt input capture
+    └── Qt window operations
 ```
 
-`ChromeSurface` consumes all `photon-command:` navigation attempts, even invalid ones. Its Ladybird navigation callback is called only for top-level navigation requests. Other top-level navigation from the trusted chrome is canceled; development mode additionally permits the pinned `http://127.0.0.1:5173` origin. The ordinary page view has neither this callback nor the chrome bootstrap script.
+The TypeScript transport sends a structured message type and JSON payload. `PhotonCommandTransport.cpp` validates the message against Photon’s command allowlist, checks each command’s arguments, and constructs the existing typed native command. `PhotonWindow` routes application commands to Rust and Qt-specific operations to the native integration code. If trusted messaging is unavailable, dispatch fails with a diagnostic; there is no alternate command transport.
 
-## Public trusted API
-
-`Photon/WebUI/src/types.ts` defines the frontend API; `main.tsx` creates the object and assigns it to `window.photon` in the WebUI entry document.
-
-| API group | Methods / values | Current destination |
-| --- | --- | --- |
-| `navigation` | `navigate`, `back`, `forward`, `reload` | `BrowserView`; Rust prepares typed `BrowserCommand`; C++ performs the corresponding Ladybird load/history operation |
-| `tabs` | `create`, `openSettings`, `select`, `close`, `reorder` | Rust `PhotonApp` decides state transitions and returns effects; `BrowserView` creates/selects/destroys page views |
-| `settings` | `setTheme`, `setDimOverlays` | Rust `PhotonApp` owns preference transitions; `BrowserView` applies theme to current Ladybird views |
-| `ui` | `setCaptureRegion` | `WindowScene` stores only the overlay input-capture bit |
-| `window` | `platform`, `beginDrag`, `minimize`, `toggleMaximize`, `close` | `PhotonWindow` / Qt; `platform` is bootstrap metadata |
-| `browser` | `state`, `onStateChange` | React reads the latest snapshot and subscribes to `photon-state` |
-
-Commands were encoded as URL host/value pairs: `navigate`, `back`, `forward`, `reload`, `new-tab`, `open-settings`, `select-tab`, `close-tab`, `reorder-tabs`, `set-theme`, `set-dim-overlays`, `capture`, `window-minimize`, `window-toggle-maximize`, `window-close`, and `window-drag`. Tab identifiers, reorder lists, theme values, booleans, and capture-region transitions were checked by `ChromeSurface::is_allowed_command` before the callback.
-
-Before this pass, the URL was generated only in `Photon/WebUI/src/main.tsx` and intercepted only in `Photon/Bridge/ChromeSurface.cpp`. No other `photon-command:` producer/consumer or navigation-based IPC substitute was found in Photon source. Normal page navigation travels through `BrowserView` and Rust's navigation preparation, then into Ladybird's normal `WebContentView::load` path; it does not use the command URL.
-
-## Rust and native ownership
-
-Rust owns Photon application state: tabs, IDs/order, internal routes, preferences, and the page metadata snapshot. Its `BrowserCommand` covers URL navigation and history operations. Tab and preference operations now enter through one typed `photon_app_dispatch` call and return `PhotonAppEffects`; Rust decides which tab is created/removed, whether active content changed, and whether preferences changed. C++ owns Ladybird view pointers, applies those effects, translates engine callbacks into Rust state updates, and performs browser commands through `WebContentView`. Qt window operations and the transient overlay input-capture bit are native concerns and currently bypass Rust state.
-
-Ladybird remains authoritative for actual web URL, title, loading, favicon, and history availability. `BrowserView` receives per-view callbacks, updates Rust, and emits Qt signals. The native side returns a serialized Rust snapshot through `ChromeSurface::update_state`, which dispatches a `photon-state` DOM event. Initial state is injected while loading the trusted bundled document. A separate fixed `photon-focus-address` event sends a keyboard-shortcut notification from native code to React.
-
-## Trust boundary review
-
-- Production creates a separate trusted chrome `WebContentView` and untrusted page `WebContentView`. Only the chrome view is loaded with the Photon bundle and given `on_navigation_request`.
-- The Ladybird hook in the registered navigation patch applies to top-level requests. Invalid command URLs and other top-level destinations are canceled before replacing the chrome document.
-- The API is assigned by trusted application JavaScript, not by a global Ladybird or WebContent injection. Ordinary pages therefore do not receive `window.photon` or a native object.
-- A page cannot access the chrome view's JavaScript context through Photon composition; the two views are separate documents/contexts. No general frame or website bridge was found.
-- Before this pass, production initial state was interpolated into an inline script. Since page title and URL fields can contain attacker-controlled text, that was a potential script injection path.
-- The development bridge deliberately trusts the pinned local Vite origin. It is a developer-controlled context and must remain unavailable to arbitrary origins.
-
-The inline-data issue was fixed during this pass: the production bootstrap now embeds the JSON bytes as base64 and decodes them as UTF-8 before `JSON.parse`.
-
-## Temporary transport and migration boundary
-
-`photon-command://` is only a transport shim: React callers already use domain methods, and `BrowserView` calls typed Rust application operations. Replacing it should affect the TypeScript command transport and the native adapter at `ChromeSurface`, not React components or Rust's application command model. A dedicated native JS binding would still need a Photon-owned, trusted-context-scoped way to deliver typed messages into the native dispatcher and return events; Ladybird currently exposes a top-level navigation interception callback, not that binding.
-
-## Findings by area
-
-- **Architecture:** the public TypeScript API was domain-shaped, but its implementation emitted free-form string names and values. The native callback repeated that untyped shape. The boundary now has a Rust `PhotonApp` command/effect layer for tab and preference decisions; browser navigation remains a typed Rust command executed by Ladybird, and window operations correctly belong to Qt.
-- **Performance:** each command currently incurs a WebContent top-level navigation request which is then canceled. This is extra transport work and coupling; there is no profiling evidence here that it causes a user-visible delay. Preference changes also serialize and write the small config file synchronously from the command call on the GUI path; this is a real filesystem operation, but no measured user-visible delay has been established. No speculative asynchronous machinery was added.
-- **Security:** ordinary page views have no command callback or injected API. Chrome top-level external navigation is canceled. Production bootstrap script interpolation was a concrete injection risk and is now encoded safely. Development remains trusted only at the pinned loopback origin.
-- **Maintainability:** wire command names and validation were concentrated in `ChromeSurface`, while destination routing lived as string comparisons in `PhotonWindow`. Typed frontend commands, a native decoder, and one typed dispatcher now separate those responsibilities.
-- **Ladybird coupling:** the temporary transport relies on Photon patch 0004's generic top-level navigation callback. A dedicated bridge would need a trusted-view-scoped native-to-JavaScript command hook and a JavaScript-to-native message path. That would require a focused Ladybird API/IPC patch; this pass does not add one.
-
-## Resulting command and event paths
+## Reverse events
 
 ```text
-React component
-    ▼
-window.photon typed API
-    ▼
-PhotonCommand (TypeScript discriminated union)
-    ▼
-PhotonCommandTransport interface
-    ▼
-Navigation transport adapter (temporary photon-command:// encoding)
-    ▼
-ChromeSurface → PhotonCommandTransport decoder → PhotonWindow::dispatch_command
-    ├── BrowserView → Rust PhotonApp command/effect boundary
-    │                       └── BrowserView applies effects to Ladybird WebContentView
-    ├── WindowScene overlay-capture state
-    └── Qt window operations
-
-Ladybird callbacks → BrowserView → Rust application state/snapshot → ChromeSurface
-    → photon-state event → React subscribers
+Ladybird observation / Rust snapshot / native focus action
+    ↓
+ChromeSurface sends a structured native event
+    ↓ trusted embedder messaging + Ladybird IPC
+PhotonCommandTransport subscribers
+    ↓
+React state and event handlers
 ```
 
-The TypeScript transport and C++ decoder are the only layers coupled to the navigation scheme. Replacing them with a dedicated binding leaves React callers, `Window::dispatch_command`, Rust application commands, and snapshot events intact. Rust owns Photon tab and preference decisions through `PhotonApp`; `BrowserView` applies returned lifecycle/state effects to native view objects. Qt window-control variants are C++/Qt-owned because Rust does not own a native window handle. See [Application Architecture](Application-Architecture.md) for the detailed responsibility audit and prioritized migration candidates.
+State and focus-address events use the trusted channel. Page-tooltip notifications remain fixed native-to-chrome DOM events because they are presentation updates rather than application commands. TypeScript adapts native events to the existing subscription API; React components do not depend on Ladybird IPC details.
 
-The existing snapshot event contains tab URL/title/loading/history capability data, preference state, and tab order. There is no structured window-state event today; `window.platform` is bootstrap metadata, and maximize state is not exposed to React.
+## Capability and security boundary
+
+The native channel is explicitly enabled for the trusted chrome view only. Ladybird associates the grant with the intended committed top-level document, validates the caller document at invocation time, and revokes the channel and queued events on document replacement. A child frame cannot use a method obtained from `parent` or `top` to send a privileged message. Ordinary page views receive no binding. The trusted chrome is kept separate from page content; a trusted chrome navigation or replacement cannot transfer its capability to the replacement document.
+
+Ladybird transports bounded structured JSON and has no Photon command names. Photon owns the command allowlist and validates message types and parameters. The bridge exposes no arbitrary native invocation, `eval`, filesystem operation, or generic method lookup. See [Trusted Embedder Messaging](Trusted-Embedder-Messaging.md) for the Ladybird API, lifecycle, limits, and threat model.
+
+## Application ownership
+
+Rust `PhotonApp` owns tab identity/order, active-tab policy, internal routes, navigation intent, preferences, and the snapshot consumed by React. Ladybird remains authoritative for actual web URL, title, loading, and history observations. C++ owns `TabId → WebContentView` associations, Ladybird callbacks and calls, view lifetimes, image conversion, Qt window operations, and execution of Rust-produced effects. The handwritten C ABI remains a small boundary for application dispatch, page observations, favicon metadata, and snapshot queries. See [Application Architecture](Application-Architecture.md) for details.
+
+## Historical command transport
+
+Before trusted embedder messaging, `PhotonCommandTransport` encoded commands as `photon-command://` URLs and `ChromeSurface` intercepted those top-level navigation requests. This made command delivery depend on navigation parsing and cancellation. It was removed after the trusted channel was exercised at runtime. The old scheme is not present in the current runtime command path; the historical description is retained here only to explain the migration.
+
+The public `window.photon` API, TypeScript `PhotonCommand` model, native typed decoder, Rust `PhotonApp`, `AppCommand`, `AppEffects`, and native effect executor did not need to change when the transport changed.
+
+## Runtime evidence and scope
+
+Runtime checks recorded for the migration confirmed a real `new-tab` command reached the native decoder through the trusted channel, one native state event reached a TypeScript subscriber, ordinary page content had no binding, a same-origin child-frame call through `top` was rejected, and replacing the trusted document removed the binding. These checks establish representative transport and isolation behavior; they are not a claim that every browser command and every lifecycle edge was exhaustively exercised in one run.

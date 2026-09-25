@@ -1,11 +1,36 @@
-# Trusted Embedder Messaging Design
+# Trusted Embedder Messaging (Implemented)
 
-## Current limitation
+## Implemented architecture
 
-Photon currently sends commands by navigating its trusted chrome view to
-`photon-command://...`. `ChromeSurface` intercepts that top-level navigation,
-decodes the URL in Photon code, and dispatches the existing typed command. This
-works, but it makes command delivery depend on navigation behavior.
+Photon enables trusted messaging only on its chrome view. The capability is
+armed for the next `load_html` call, attached to the matching committed
+top-level document, and identified by a monotonically increasing generation.
+The binding validates the calling document at send time. Replacing the active
+document disconnects the channel and drops queued events. Ordinary views and
+unrelated documents receive no binding.
+
+```text
+React / TypeScript
+    ↓ window.photon
+PhotonCommandTransport
+    ↓ structured trusted message
+Ladybird view-scoped IPC
+    ↓
+Photon typed decoder → PhotonApp (Rust) → AppEffects → C++ executor
+```
+
+Native state/focus events return over the same channel to TypeScript
+subscribers. The public React API and Rust command/effect model are unchanged.
+The temporary `photon-command://` command transport has been removed; a missing
+trusted binding reports an explicit runtime error.
+
+## Original limitation (resolved)
+
+Before implementation, Photon sent commands by navigating its trusted chrome view to
+`photon-command://...`. `ChromeSurface` intercepted that top-level navigation,
+decoded the URL in Photon code, and dispatched the existing typed command. The
+transport was removed after the trusted channel was validated because command
+delivery should not depend on navigation behavior.
 
 Ladybird's WebUI is a useful lifecycle precedent, but it is not a suitable
 endpoint to reuse directly. `WebView::WebUI::create()` accepts only a registered
@@ -79,22 +104,20 @@ WebContent-side connection and clears it when
 different document. The UI side currently stores a single `RefPtr<WebUI>` on
 `WebContentClient`; it is not the per-embedder-view endpoint Photon needs.
 
-## Proposed capability and API
+## Implemented capability and API
 
-Add a small generic `WebView::TrustedEmbedderMessaging` facility. It transports
-JSON values and knows nothing about Photon commands, tabs, or windows.
+Ladybird's generic trusted embedder messaging facility transports JSON values
+and knows nothing about Photon commands, tabs, or windows.
 
 The capability is an explicit, one-shot authorization attached to one
 `ViewImplementation` and one generated navigation ID:
 
 ```cpp
-view.enable_trusted_embedder_messaging(
-    on_message_callback,
-    maximum_message_size);
+view.enable_trusted_embedder_messaging(on_message_callback);
 view.load_html(chrome_html);
 ```
 
-Proposed public types in `Libraries/LibWebView/TrustedEmbedderMessaging.h`:
+Public types in `Libraries/LibWebView/TrustedEmbedderMessaging.h`:
 
 ```cpp
 struct TrustedEmbedderMessage {
@@ -135,20 +158,19 @@ endpoint is scoped to its `PageId` and fresh channel generation. It must not
 hold a raw `WebContentView*`; the view owns its page association and closes the
 endpoint before clearing callbacks on replacement/destruction.
 
-Suggested limits are a 64 KiB serialized incoming message and a 64 KiB
-serialized outgoing event. These are channel defaults, clamped to a documented
-implementation maximum. `type` is a non-empty UTF-8 string of at most 128
-bytes; each payload must be a JSON value. Invalid JSON, invalid UTF-8, unknown
-envelope fields if the wire decoder is strict, and over-limit messages are
-dropped and logged at a rate-limited level. A bad message must not terminate
-the browser process. Photon still applies its command allowlist and validates
-all command-specific values.
+The channel clamps incoming and outgoing messages to 64 KiB and message types
+to 128 bytes. Types must be non-empty UTF-8 strings and payloads must be JSON
+values. Invalid or oversized messages are rejected before the Photon callback;
+Photon still applies its command allowlist and validates command-specific
+values. The native-to-document queue holds at most 64 messages and 1 MiB of
+serialized data, dropping oldest events on overflow and clearing the queue when
+the authorized document is revoked.
 
 ## IPC messages
 
-Use a distinct paired transport per authorized document, not the existing
-shared `WebUI` connection. Its generated endpoint definitions should be added
-as `Services/WebContent/TrustedEmbedderMessagingClient.ipc` and
+The implementation uses a distinct paired transport per authorized document, not the existing
+shared `WebUI` connection. Its endpoint definitions are
+`Services/WebContent/TrustedEmbedderMessagingClient.ipc` and
 `Services/WebContent/TrustedEmbedderMessagingServer.ipc`:
 
 ```text
@@ -169,7 +191,7 @@ already binds the endpoints to one authorized page connection; each endpoint
 also carries a monotonically increasing per-view generation on every message
 to reject stale queued work after revocation.
 
-Add one routed operation to `Services/WebContent/WebContentServer.ipc`:
+The routed operation in `Services/WebContent/WebContentServer.ipc` is:
 
 ```text
 connect_trusted_embedder_messaging(
@@ -190,10 +212,12 @@ Revoke is local on document replacement; closing the paired transport is
 authoritative.
 
 This avoids changing generic `load_html` IPC or adding a pre-load authorization
-round trip. The binding is installed after commit, so the transport must buffer
-commands until it receives its ready event. If a renderer/process swap means
-the target document is hosted elsewhere, no grant is forwarded automatically;
-the host must explicitly reauthorize the new view/document.
+round trip. `PageClient` records the completed top-level navigation ID before
+the UI process connects the endpoint; the WebContent side accepts the channel
+only when that ID still identifies the current active document. If a
+renderer/process swap means the target document is hosted elsewhere, no grant
+is forwarded automatically; the host must explicitly reauthorize the new
+view/document.
 
 ## Document lifecycle
 
@@ -221,10 +245,20 @@ Document identity)`. It is not an origin grant and does not survive by URL.
 6. View destruction closes the endpoint and clears the callback. Renderer
    recreation does not reconstitute a grant from URL, history state, or origin.
 
-Channel connection should be activated from the matching
+Channel connection is activated from the matching
 `WebContentPage::did_finish_loading` transaction, after navigation identity
 has been checked. Do not install it by observing a URL such as `about:srcdoc`;
 that URL is not proof of embedder trust.
+
+Photon's `ChromeSurface` also filters top-level navigation requests. Ladybird
+implements `WebContentView::load_html()` by starting an internal
+`about:srcdoc` navigation. The chrome filter must allow that one request
+initiated by its pending native `load_html()` call, or the intended document
+is canceled before the matching completion and channel-connection hooks run.
+This exception only permits the engine's load operation: messaging remains
+authorized by the generated navigation ID and the committed `Document`, never
+by the `about:srcdoc` URL. The one-shot allowance is cleared by the first
+navigation request and rejects it unless its URL is `about:srcdoc`.
 
 ## Frame security
 
@@ -232,51 +266,53 @@ The binding is installed only into the authorized top-level document's realm,
 but that alone is insufficient: same-origin child code may read
 `parent.<binding>` and call a function obtained there.
 
-The binding method must check the caller at invocation time. Implement the
-generated native method in the new `Web::Internals::TrustedEmbedderMessaging`
-class and compare the caller's incumbent settings object's realm/document to
-the connection's authorized document. The check must use Ladybird's
-`HTML::incumbent_settings_object()`/callback-incumbent machinery, not only the
-binding object's realm or `this` value. Require all of:
+The binding checks the caller at invocation time. The generated native methods
+in `Web::Internals::TrustedEmbedderMessaging` compare the caller's incumbent
+settings object's realm/document to the connection's authorized document
+using Ladybird's `HTML::incumbent_settings_object()`/callback-incumbent
+machinery, rather than relying on the binding object's realm or `this` value.
+The checks require all of:
 
 * the incumbent settings object has the exact authorized `Document`;
 * that document is still the active document of the local top-level
   traversable;
 * its connection generation is current and not revoked.
 
-Reject calls from a child frame even when the child is same-origin and invokes
-the method through `parent` or `top`. A WebIDL `SecurityError` is appropriate
-for a caller-context mismatch; stale/revoked channels should reject without
-native delivery. Add a targeted test where the iframe obtains the parent
-method reference and invokes it. Also test a child calling
-`parent.<binding>.send(...)` directly.
+Calls from a child frame are rejected even when the child is same-origin and
+invokes the method through `parent` or `top`; a caller-context mismatch raises
+a WebIDL `SecurityError`. Stale or revoked channels do not deliver messages.
 
-Native-to-JavaScript events are dispatched on the authorized document, not
-`window.top` and not a frame-selected target. A child may observe a bubbling
-event if the API chooses bubbling, so events should be non-bubbling and
-non-composed by default. Photon should use a dedicated event type with a
-validated `{ type, payload }` detail. Event observation is not itself a native
-capability; the caller check protects commands.
+Native-to-JavaScript event payloads are queued on the authorized document's
+connection. Ladybird dispatches a data-free, non-bubbling,
+non-composed availability event on that document. The top-level binding's
+`receiveMessages()` method drains the queue only after the same incumbent
+document and active-document checks used for `postMessage()`. This avoids
+exposing event payloads to same-origin child code listening on
+`parent.document`. The queue is bounded by message count and aggregate bytes;
+old messages are dropped on overflow and all remaining messages are discarded
+with the document connection. A child may observe the availability signal but
+cannot read the queued payload.
 
 ## Binding and payload format
 
-Add `Libraries/LibWeb/Internals/TrustedEmbedderMessaging.idl`, `.h`, and `.cpp`
-with one method, conceptually:
+`Libraries/LibWeb/Internals/TrustedEmbedderMessaging.idl`, `.h`, and `.cpp`
+define the binding:
 
 ```webidl
 [LegacyNoInterfaceObject]
 interface TrustedEmbedderMessaging {
     undefined postMessage(DOMString type, any payload);
+    DOMString receiveMessages();
 };
 ```
 
-The only operation is posting a structured message; it has no method lookup,
+The operations post and receive structured messages; there is no method lookup,
 evaluation, native object access, or reply callback. `payload` is cloned using
 Ladybird's WebDriver JSON clone path, matching the existing WebUI facility.
 The native endpoint carries a message type plus `JsonValue` payload. The
-binding must reject non-JSON values, serialization failure, invalid strings,
-and payloads exceeding the configured serialized-size limit before IPC send.
-The receiving side checks the limit again after serialization/decoding.
+binding rejects non-JSON values, serialization failures, invalid strings, and
+payloads exceeding the configured serialized-size limit before IPC send. The
+receiving side checks the limit again after serialization/decoding.
 
 Expose the object under a dedicated internal name, for example
 `window.embedderMessaging`, only after authorization. The name is an
@@ -284,58 +320,40 @@ implementation detail, not a generic `window.native.invoke` surface. Native
 code treats `type` as untrusted and dispatches only through its own explicit
 allowlist.
 
-Native events are delivered as a non-bubbling `EmbedderMessage` custom event
-whose detail is `{ type, payload }`. Photon’s existing transport converts that
-event into its current typed `PhotonTransportEvent` subscription API. Event
-queues are not retained for a later document: if the authorized document or
-channel is gone, the event is dropped. A new document gets a fresh ready
-notification and channel only after explicit authorization.
+Native event payloads remain structured `JsonValue` values in the document
+connection. A data-free `TrustedEmbedderMessageAvailable` DOM event wakes
+Photon's existing transport, which calls `receiveMessages()` to pull the
+queued `{ type, payload }` records and convert them into the existing typed
+`PhotonTransportEvent` subscription API. Queue contents are never transferred
+to a later document: if the authorized document or channel is gone, they are
+dropped. A new document gets a fresh channel only after explicit authorization.
 
-## File-level patch plan
+## Implemented file set
 
-### Ladybird files
+Ladybird changes are represented by the consolidated Photon patch
+`Patches/ladybird/0010-add-trusted-embedder-messaging-channel.patch`:
 
-| File | Minimal intended change |
+| Files | Responsibility |
 | --- | --- |
-| `Libraries/LibWebView/TrustedEmbedderMessaging.h` (new) | Public message, callback, and payload-limit value types. |
-| `Libraries/LibWebView/ViewImplementation.h` | Add explicit one-next-`load_html` enable, outbound send, and disable methods; keep disabled by default. |
-| `Libraries/LibWebView/ViewImplementation.cpp` | Bind opt-in to the generated navigation ID, own callback/endpoint/generation, route sends, revoke on replacement/close. |
-| `Libraries/LibWebView/WebContentPage.h` | Store pending/active grant and host endpoint scoped to this page/navigation. |
-| `Libraries/LibWebView/WebContentPage.cpp` | Consume only matching authorization; create paired channel after matching top-level document activation; revoke on navigation/document replacement. |
-| `Services/WebContent/WebContentServer.ipc` | Add routed channel-connect operation keyed by page, confirmed navigation ID, and generation. |
-| `Services/WebContent/TrustedEmbedderMessagingClient.ipc` (new) | WebContent-to-UI structured message endpoint. |
-| `Services/WebContent/TrustedEmbedderMessagingServer.ipc` (new) | UI-to-WebContent structured event endpoint. |
-| `Services/WebContent/ConnectionFromClient.h/.cpp` | Validate page and pending authorization; route authorization/revocation to `PageClient`. |
-| `Services/WebContent/PageClient.h/.cpp` | Own document connection; install only on authorized top-level document; clear it on active-document changes and page teardown. |
-| `Services/WebContent/TrustedEmbedderMessagingConnection.h/.cpp` (new) | Install/revoke JS object, check invocation caller, clone and bound JSON, deliver/drop native events. |
-| `Libraries/LibWeb/Internals/TrustedEmbedderMessaging.idl/.h/.cpp` (new) | Narrow `postMessage(type, payload)` binding and incumbent-document guard. |
-| `Libraries/LibWeb/CMakeLists.txt` or current IDL source manifest | Register the new binding sources if required by this checkout's generated binding rules. |
-| `Documentation/Photon/Trusted-Embedder-Messaging.md` | This design; implementation should update lifecycle/security notes if details change. |
+| `Libraries/LibWebView/TrustedEmbedderMessaging.h/.cpp` | Public typed message/callback/limits API and view-scoped IPC channel. |
+| `Libraries/LibWebView/ViewImplementation.h/.cpp` | Per-view opt-in, next-`load_html` authorization, navigation identity and generation, stale grant cancellation, native send/disable. |
+| `Libraries/LibWebView/WebContentPage.cpp`, `Services/WebContent/ConnectionFromClient.cpp`, `WebContentServer.ipc` | Route the explicitly authorized page and generation to WebContent. |
+| `Services/WebContent/TrustedEmbedderMessagingClient.ipc`, `TrustedEmbedderMessagingServer.ipc`, `TrustedEmbedderMessagingConnection.h/.cpp` | Bidirectional structured IPC, bounded event queue, document binding installation and revocation. |
+| `Services/WebContent/PageClient.h/.cpp`, `Libraries/LibWeb/Page/Page.h` | Bind to the active top-level document, validate document/generation on send/receive, clear the connection on replacement. |
+| `Libraries/LibWeb/Internals/TrustedEmbedderMessaging.idl/.h/.cpp`, `Forward.h`, `idl_files.cmake`, `Libraries/LibWeb/CMakeLists.txt`, `Libraries/LibWebView/CMakeLists.txt`, `Services/WebContent/CMakeLists.txt` | Narrow JavaScript binding and generated-source/build registration. |
 
-`UI/Qt/WebContentView.h/.cpp` should need no engine change because it already
-inherits `ViewImplementation`. Photon calls the new inherited API through its
-existing `Ladybird::WebContentView` instance. Generated IPC and binding output
-must not be committed as handwritten source unless the repository explicitly
-tracks it.
-
-### Photon files in the later implementation pass
-
-| File | Intended change |
-| --- | --- |
-| `Photon/Bridge/ChromeSurface.cpp/.h` | Arm trusted messaging on the chrome view before its production `load_html`; register typed callback; send state/tooltip/focus events via the channel; remove command navigation interception. |
-| `Photon/Bridge/PhotonCommandTransport.cpp/.h` | Replace URL decoding with strict JSON/message envelope decoding into existing `PhotonCommand` variants. |
-| `Photon/WebUI/src/bridge/transport.ts` | Replace the navigation implementation with `window.embedderMessaging.postMessage` and event subscription; preserve `PhotonCommandTransport`, `PhotonCommand`, and React-facing methods. |
-| `Photon/WebUI/src/main.tsx` | Change only transport construction/readiness hookup as needed; keep the public `window.photon` API and components unchanged. |
-| `Photon/CMakeLists.txt` | Remove `PhotonCommandTransport` source only if its implementation is folded elsewhere; keep the application dispatcher unchanged. |
-| Photon architecture/bridge docs | Replace scheme-specific transport documentation. |
-
-The photon decoder should accept one JSON object shape, e.g. `{type, payload}`;
-each command schema remains explicit and bounded. No Rust command/effect/state
-types change.
+`UI/Qt/WebContentView` needs no Ladybird modification: it inherits the
+`ViewImplementation` API. Photon-owned integration is in
+`Photon/Bridge/ChromeSurface.cpp/.h`,
+`Photon/Bridge/PhotonCommandTransport.cpp/.h`, and
+`Photon/WebUI/src/bridge/transport.ts`. ChromeSurface opts in before `load_html`
+and supplies the typed native callback. The decoder accepts only bounded JSON
+messages with the explicit Photon command allowlist. React and Rust command,
+state, and effect types did not change for transport removal.
 
 ## Photon integration
 
-Production integration should be:
+Production integration is:
 
 ```text
 ChromeSurface creates its existing trusted WebContentView
@@ -362,10 +380,9 @@ Rust snapshot / Photon native event
 The React public API, `PhotonCommand`, Rust `PhotonApp`, `AppCommand`,
 `AppEffects`, and native application dispatch stay unchanged. Only the
 transport implementation and its native typed decoder change. The development
-Vite view must be treated deliberately: do not grant a capability based only
-on `127.0.0.1` or query parameters. Either provide a native-authorized trusted
-document load mechanism for development, or leave native messaging disabled
-in that mode.
+Vite view is not authorized by this `load_html`-scoped capability; its
+privileged commands fail closed with a missing-channel diagnostic. Loopback
+origin and query parameters do not grant the capability.
 
 ## Security properties and threat model
 
@@ -373,7 +390,7 @@ in that mode.
 | --- | --- | --- |
 | Malicious ordinary webpage | No opt-in means no binding or endpoint. | Ensure only the separate chrome view arms it. |
 | Malicious child frame | No binding installed in child; incumbent caller-document check rejects invocation through `parent`/`top`. | Keep chrome content and CSP narrow; do not treat same-origin as authorization. |
-| Same-origin child frame | Same caller check; top-level object possession is insufficient. | Add explicit parent-method-reference invocation tests. |
+| Same-origin child frame | Same caller check; top-level object possession is insufficient. | Keep the direct `top` invocation rejection covered in runtime security checks. |
 | Navigation away/full replacement | Old document connection is revoked on active-document change; authorization is not copied to the new document. | ChromeSurface may still cancel unexpected top-level chrome navigation. |
 | Same-document navigation | Same document, same channel; no new capability is granted. | Validate commands as usual. |
 | Compromised React/frontend | It can send arbitrary bytes within the bounded channel. | Native decoder validates type, fields, lengths, enums, IDs, and command allowlist; React compromise is not a trust boundary. |
@@ -387,8 +404,10 @@ validation. There is no generic native invocation or `eval` facility.
 
 ## Alternatives rejected
 
-* **Continue navigation interception:** command delivery remains a fake
-  navigation, depends on URL parsing, and can affect navigation state/behavior.
+* **Continue navigation interception:** command delivery would remain a fake
+  navigation, depend on URL parsing, and could affect navigation state or
+  behavior. The generic navigation callback remains available for legitimate
+  navigation policy, but it is no longer a Photon command transport.
 * **Inject a JavaScript function from Photon:** executing host-authored JS is
   not a native message endpoint; it offers no structured IPC, caller-realm
   authorization, or safe lifecycle by itself.
@@ -415,27 +434,24 @@ Existing WebUI could later share lower-level JSON serialization/event helpers,
 but should not share its authorization/host-registration layer until both
 facilities demonstrably have the same lifecycle contract.
 
-## Implementation sequence and tests
+## Validation status
 
-1. Add the generic channel message types and paired IPC endpoint definitions;
-   build generated IPC and endpoint classes without changing Photon.
-2. Add the explicit one-next-`load_html` opt-in, generation, and exact
-   navigation-ID authorization. Test that ordinary `load_html` and all normal
-   views create no endpoint.
-3. Add `TrustedEmbedderMessagingConnection` and the binding. Test top-level
-   delivery, serialization failures, payload bounds, and caller rejection.
-4. Wire commit/revoke behavior. Test same-document navigation, full navigation,
-   reload, history traversal, replacement `load_html`, close, and process
-   replacement. Confirm stale event sends are dropped.
-5. Add WebContent/browser tests for ordinary top-level pages, same-origin
-   iframe calls through `parent` and `top`, cross-origin iframes, iframe
-   document replacement, and no inherited child binding.
-6. Integrate Photon transport and strict native decoding while preserving the
-   existing public API and Rust application path. Test all command variants
-   and reverse typed events.
-7. Remove `photon-command://` interception only after command/event and security
-   smoke tests pass; retain unrelated navigation interception.
+The generic facility is implemented in consolidated patch 0010; Photon enables
+it only for its chrome view. On the freshly materialized Release build after
+removing the URL fallback, a real `window.photon.tabs.create()` call reached
+the native decoder as `new-tab`, then one native state event reached the
+TypeScript subscriber. Earlier runtime security checks confirmed an ordinary
+page has no binding, a same-origin iframe call through `top` is rejected, and
+replacing the trusted document removes the binding. Payload and event-queue
+bounds are enforced in the implementation. A full interactive command sweep
+was not completed in the headless test environment.
 
-The API is plausibly upstreamable because it is a generic, opt-in structured
-message channel for one embedder-owned view/document, and the engine handles
-transport and lifecycle while the embedder retains message meaning.
+Automated coverage should continue to target caller-document identity,
+replacement/reload lifecycle, malformed and oversized input, queue overflow,
+and stale generations. The implementation does not grant authorization from
+an origin or URL and does not automatically reauthorize a replacement page.
+
+The API is generic enough to plausibly upstream: it provides an opt-in
+structured message channel for one embedder-owned view/document, while the
+engine handles transport and lifecycle and the embedder retains message
+meaning.

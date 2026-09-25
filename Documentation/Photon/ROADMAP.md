@@ -1,6 +1,5 @@
 # Planned
 
-- Replace the temporary `photon-command://` bridge with structured trusted embedder messaging
 - Build Photon DevTools
 - Build Photon onboarding
 - Add a prefetching system similar to Chromium Prefetch 2
@@ -19,15 +18,11 @@
 # In progress
 
 - Rust application and browser integration
-- Structured native messaging between the Photon UI and engine
 - Website and waitlis
 - Engine performance investigation and optimization
 
 
 # In Review
-- Replacing Ladybird's default browser UI with Photon (using our react chrome and bridge.)
-- Ladybird upstream patch and synchronization system
-- CSS `corner-shape` and squircle support 
 - WebGL and rendering experiments
 
 # Implemented
@@ -57,8 +52,11 @@
 - Native transient popup windows
 - Basic Photon browser window and web content composition
 - Bidirectional communication between browser chrome and native code
-- Temporary `photon-command://` command transport
-- Top-level navigation command interception
+- Trusted view-scoped embedder messaging between the Photon UI and native host
+- Document-scoped authorization and native event delivery
+- Removed the navigation-based `photon-command://` command transport
+- Individual patch enable/disable controls in the Photon patch CLI
+- Bundled Inter variable fonts for the Photon WebUI
 - Photon command decoding
 - BrowserView lifecycle cleanup
 - Fixed shutdown database assertion

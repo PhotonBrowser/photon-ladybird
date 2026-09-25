@@ -11,9 +11,11 @@ window.photon typed API
     ▼
 PhotonCommand (TypeScript)
     ▼
-PhotonCommandTransport (temporary navigation adapter)
+PhotonCommandTransport
     ▼
-ChromeSurface → PhotonCommandTransport decoder → Window::dispatch_command
+view-scoped trusted embedder messaging → Photon typed decoder
+    ▼
+Window::dispatch_command
     ├── BrowserView → typed Rust PhotonApp commands/effects → Ladybird WebContentView
     ├── WindowScene → Qt input-capture state
     └── PhotonWindow → Qt window operations
@@ -24,7 +26,7 @@ Ladybird callback / Qt action
     ▼
 BrowserView → grouped partial PageObservation → Rust PhotonApp snapshot
     ▼
-ChromeSurface → photon-state event → React subscribers
+ChromeSurface → trusted embedder event → React subscribers
 ```
 
 ## Responsibilities
@@ -49,9 +51,13 @@ PhotonWindow
 
 The Web UI uses a transparent full-window chrome surface above the active Ladybird `WebContentView`, laid out below the 72-pixel toolbar. `WindowScene` captures the toolbar and the whole page area while a React overlay is open, then forwards pointer and wheel input elsewhere to the page. React owns overlay rendering and dismissal; native code keeps only the modal input-capture flag needed to keep the underlying page inert. It also relays the page cursor to the top chrome surface while the pointer is over web content.
 
-The bundled `load_html` chrome document is trusted. Its top-level navigation hook passes the temporary navigation transport to a Photon-owned decoder, which returns a typed `PhotonCommand`; invalid command requests and other top-level navigation are canceled. `Window::dispatch_command` is the native routing boundary. It sends browser/tab/preferences operations through `BrowserView` to typed Rust state APIs, and sends window/input operations to Qt. Hot-reload mode permits only the pinned `http://127.0.0.1:5173` origin. The ordinary page surface has no Photon command callback or chrome API. The trusted bootstrap encodes its initial snapshot as base64 data before parsing it in JavaScript.
+The bundled `load_html` chrome document is trusted and explicitly opts its view into Ladybird's document-scoped embedder messaging capability. The native decoder validates structured messages into typed `PhotonCommand` values; other top-level navigation is filtered by ChromeSurface. `Window::dispatch_command` is the native routing boundary. It sends browser/tab/preferences operations through `BrowserView` to typed Rust state APIs, and sends window/input operations to Qt. Hot-reload mode permits only the pinned `http://127.0.0.1:5173` origin but does not receive the trusted messaging capability, so privileged commands there fail closed. The ordinary page surface has no Photon command callback or chrome API. The trusted bootstrap encodes its initial snapshot as base64 data before parsing it in JavaScript.
 
-The TypeScript `PhotonCommandTransport` interface keeps the public `window.photon` methods independent of the current URL adapter. Replacing this adapter and the C++ `PhotonCommandTransport` decoder with a dedicated trusted-context native binding should leave React callers, the typed native command model, Rust application commands, and snapshot events unchanged. A native binding itself is not available from the current Ladybird surface; see the [bridge audit](Bridge-Audit.md) for the current API and security review and [Application Architecture](Application-Architecture.md) for the ownership audit and migration plan.
+The TypeScript transport keeps the public `window.photon` methods and React event consumers independent of the native channel. It covers typed command dispatch and subscriptions for state, tooltip, and focus events. Commands and structured events travel through Ladybird's trusted embedder messaging channel; a missing command binding fails explicitly. React callers, native `PhotonCommand`, Rust application commands, and effect execution are transport-independent. See the [bridge audit](Bridge-Audit.md) for lifecycle and security details.
+
+The WebUI loads the bundled Inter variable font (regular and italic) from `Photon/Resources/Fonts/Inter`. Vite inlines these assets into the production HTML, so Photon chrome typography does not depend on Inter being installed on the host system. The font's SIL Open Font License is included with the source assets.
+
+The trusted messaging channel is explicitly enabled only for ChromeSurface's view. Ladybird binds it to the authorized committed top-level document, checks caller-document identity on sends, and revokes it when that document is replaced. Ordinary page views have no binding. Photon validates every command against its typed allowlist.
 
 Each Rust tab record has a corresponding Ladybird view in the C++ adapter. Rust decides tab lifecycle and preference transitions; C++ applies the returned effects to the native views. Theme mode and tab metadata are Rust-owned; React keeps only temporary interaction state such as an unfinished address edit or an open popover. Native rendering and input plumbing stay in C++, while presentation and animation live in React/CSS.
 
