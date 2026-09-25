@@ -110,6 +110,7 @@
 
     /* Light palette */
     --photon-color-canvas: #f4f5f6;
+    --photon-color-window-tint: color-mix(in srgb, var(--photon-color-canvas) 95%, transparent);
     --photon-color-surface: #e9ebed;
     --photon-color-surface-raised: #ffffff;
     --photon-color-surface-hover: #dfe2e5;
@@ -234,7 +235,7 @@ button {
     position: relative;
     width: 100%;
     height: var(--photon-chrome-height);
-    background: var(--photon-color-canvas);
+    background: var(--photon-color-window-tint);
     pointer-events: auto;
 }
 
@@ -316,7 +317,7 @@ button {
     min-width: 0;
     align-items: center;
     padding: var(--photon-space-2) var(--photon-space-5) 0;
-    background: var(--photon-color-canvas);
+    background: transparent;
     user-select: none;
 }
 
@@ -630,7 +631,7 @@ button {
     align-items: center;
     gap: var(--photon-space-2);
     padding: var(--photon-space-1) var(--photon-toolbar-gutter);
-    background: var(--photon-color-canvas);
+    background: transparent;
     pointer-events: auto;
 }
 
@@ -832,7 +833,7 @@ button {
     position: absolute;
     z-index: 1;
     overflow: auto;
-    background: var(--photon-color-canvas);
+    background: var(--photon-color-window-tint);
     color: var(--photon-color-text-primary);
     inset: var(--photon-chrome-height) 0 0;
     pointer-events: auto;
