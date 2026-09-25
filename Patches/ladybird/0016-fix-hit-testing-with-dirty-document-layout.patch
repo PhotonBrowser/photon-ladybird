@@ -1,0 +1,77 @@
+--- a/Libraries/LibWeb/DOM/Document.cpp
++++ b/Libraries/LibWeb/DOM/Document.cpp
+@@ -9989,6 +9989,14 @@
+ 
+ Painting::HitTestDisplayList const* Document::ensure_hit_test_display_list()
+ {
++    // Hit testing reads layout-backed style values while preparing paint state, and may rebuild the display list.
++    // Bring layout current here rather than relying on each caller to have done so already.
++    if (!layout_is_up_to_date()) {
++        if (is_running_update_layout())
++            return nullptr;
++        update_layout(UpdateLayoutReason::DocumentHitTest);
++    }
++
+     update_paint_and_hit_testing_properties_if_needed();
+ 
+     if (!has_committed_viewport_box())
+--- a/Libraries/LibWeb/DOM/Document.h
++++ b/Libraries/LibWeb/DOM/Document.h
+@@ -112,6 +112,7 @@
+     X(Debugging)                             \
+     X(DocumentElementFromPoint)              \
+     X(DocumentElementsFromPoint)             \
++    X(DocumentHitTest)                       \
+     X(DocumentCaretPositionFromPoint)        \
+     X(DocumentFindMatchingText)              \
+     X(DocumentReadinessComplete)             \
+--- a/Libraries/LibWeb/Internals/Internals.cpp
++++ b/Libraries/LibWeb/Internals/Internals.cpp
+@@ -465,10 +465,7 @@
+ Optional<Painting::HitTestResult> Internals::hit_test(double x, double y)
+ {
+     auto& active_document = window().associated_document();
+-    // NOTE: Force a layout update just before hit testing. This is because the current layout tree, which is required
+-    //       for stacking context traversal, might not exist if this call occurs between the tear_down_layout_tree()
+-    //       and update_layout() calls
+-    active_document.update_layout(DOM::UpdateLayoutReason::InternalsHitTest);
++    // Document::hit_test() ensures layout before building its hit-test display list.
+     return active_document.hit_test({ x, y });
+ }
+ 
+--- /dev/null
++++ b/Tests/LibWeb/Text/expected/hit_testing/layout-dirtied-before-hit-test.txt
+@@ -0,0 +1,3 @@
++true
++true
++true
+--- /dev/null
++++ b/Tests/LibWeb/Text/input/hit_testing/layout-dirtied-before-hit-test.html
+@@ -0,0 +1,27 @@
++<!DOCTYPE html>
++<style>
++    html, body {
++        margin: 0;
++    }
++
++    #moving {
++        position: absolute;
++        left: 0;
++        top: 0;
++        width: 20px;
++        height: 20px;
++    }
++</style>
++<div id="moving"></div>
++<script src="../include.js"></script>
++<script>
++    test(() => {
++        const moving = document.getElementById("moving");
++        println(internals.hitTest(10, 10).node === moving);
++
++        moving.style.left = "40px";
++
++        println(internals.hitTest(50, 10).node === moving);
++        println(internals.hitTest(10, 10).node !== moving);
++    });
++</script>

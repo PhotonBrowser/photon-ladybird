@@ -90,3 +90,14 @@ file = "ladybird/0015-remove-temporary-messaging-lifecycle-traces.patch"
 description = "remove temporary messaging lifecycle traces"
 area = "WebContent integration"
 
+[[patches]]
+id = "0016"
+file = "ladybird/0016-fix-hit-testing-with-dirty-document-layout.patch"
+description = "fix hit testing with dirty document layout"
+area = "Input handling"
+
+[[patches]]
+id = "0017"
+file = "ladybird/0017-strengthen-dirty-layout-hit-test-regression.patch"
+description = "strengthen dirty-layout hit-test regression"
+area = "Input handling"
