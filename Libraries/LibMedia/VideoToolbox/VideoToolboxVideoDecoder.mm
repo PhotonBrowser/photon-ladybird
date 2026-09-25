@@ -176,9 +176,41 @@ RetainedRef<CFMutableDictionaryRef> destination_attributes_for_bit_depth(u8 bit_
         CFArrayAppendValue(pixel_format_numbers.ref(), number.ref());
     }
 
-    RetainedRef<CFMutableDictionaryRef> attributes { CFDictionaryCreateMutable(kCFAllocatorDefault, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks) };
+    RetainedRef<CFMutableDictionaryRef> attributes { CFDictionaryCreateMutable(kCFAllocatorDefault, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks) };
     CFDictionarySetValue(attributes.ref(), kCVPixelBufferPixelFormatTypeKey, pixel_format_numbers.ref());
+
+    RetainedRef<CFMutableDictionaryRef> io_surface_properties { CFDictionaryCreateMutable(kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks) };
+    CFDictionarySetValue(attributes.ref(), kCVPixelBufferIOSurfacePropertiesKey, io_surface_properties.ref());
     return attributes;
+}
+
+bool hardware_decoding_is_required(CodecID codec_id)
+{
+    switch (codec_id) {
+    case CodecID::H264:
+    case CodecID::H265:
+        return false;
+    default:
+        return true;
+    }
+}
+
+RetainedRef<CFMutableDictionaryRef> decoder_specification_for_codec(CodecID codec_id)
+{
+    RetainedRef<CFMutableDictionaryRef> specification { CFDictionaryCreateMutable(kCFAllocatorDefault, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks) };
+    if (hardware_decoding_is_required(codec_id))
+        CFDictionarySetValue(specification.ref(), kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder, kCFBooleanTrue);
+    else
+        CFDictionarySetValue(specification.ref(), kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder, kCFBooleanTrue);
+    return specification;
+}
+
+bool session_uses_hardware_decoder(VTDecompressionSessionRef session)
+{
+    RetainedRef<CFBooleanRef> uses_hardware;
+    if (VTSessionCopyProperty(session, kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder, kCFAllocatorDefault, uses_hardware.out()) != noErr)
+        return false;
+    return uses_hardware.ref() != nullptr && CFBooleanGetValue(uses_hardware.ref());
 }
 
 Optional<DecoderFormat> vp9_decoder_format(CMVideoCodecType codec_type, u8 profile, u8 bit_depth, Codecs::VP9::ColorParameters const& color_parameters, Gfx::IntSize size)
@@ -195,8 +227,7 @@ Optional<DecoderFormat> vp9_decoder_format(CMVideoCodecType codec_type, u8 profi
     if (CMVideoFormatDescriptionCreate(kCFAllocatorDefault, codec_type, size.width(), size.height(), extensions.ref(), &description) != noErr)
         return {};
 
-    RetainedRef<CFMutableDictionaryRef> specification { CFDictionaryCreateMutable(kCFAllocatorDefault, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks) };
-    CFDictionarySetValue(specification.ref(), kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder, kCFBooleanTrue);
+    auto specification = decoder_specification_for_codec(CodecID::VP9);
     CFDictionarySetValue(specification.ref(), kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms, atoms.ref());
 
     return DecoderFormat { RetainedRef<CMVideoFormatDescriptionRef> { description }, move(specification), destination_attributes_for_bit_depth(bit_depth), color_parameters.cicp };
@@ -216,10 +247,7 @@ Optional<DecoderFormat> av1_decoder_format(CMVideoCodecType codec_type, Codecs::
     if (CMVideoFormatDescriptionCreate(kCFAllocatorDefault, codec_type, size.width(), size.height(), extensions.ref(), &description) != noErr)
         return {};
 
-    RetainedRef<CFMutableDictionaryRef> specification { CFDictionaryCreateMutable(kCFAllocatorDefault, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks) };
-    CFDictionarySetValue(specification.ref(), kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder, kCFBooleanTrue);
-
-    return DecoderFormat { RetainedRef<CMVideoFormatDescriptionRef> { description }, move(specification), destination_attributes_for_bit_depth(parameters.bit_depth), parameters.optional_fields.cicp };
+    return DecoderFormat { RetainedRef<CMVideoFormatDescriptionRef> { description }, decoder_specification_for_codec(CodecID::AV1), destination_attributes_for_bit_depth(parameters.bit_depth), parameters.optional_fields.cicp };
 }
 
 Optional<DecoderFormat> decoder_format_for_frame(CodecID codec_id, CodedFrame const& coded_frame)
@@ -263,19 +291,17 @@ ParsedCodec normalize_parsed_codec_for_support_keying(ParsedCodec const& codec)
         return ParsedCodec { parameters };
     }
     case CodecID::H264: {
-        auto parameters = codec.h264_parameters();
-        if (!parameters.has_value())
-            return codec;
-        auto profile = parameters->profile();
+        Optional<Codecs::H264::Profile> profile = Codecs::H264::Profile::Main;
+        if (auto parameters = codec.h264_parameters(); parameters.has_value())
+            profile = parameters->profile();
         if (!profile.has_value())
             return codec;
         return ParsedCodec { Codecs::H264::canonical_parameters_for_profile(*profile) };
     }
     case CodecID::H265: {
-        auto parameters = codec.h265_parameters();
-        if (!parameters.has_value())
-            return codec;
-        auto profile = parameters->profile();
+        Optional<Codecs::H265::Profile> profile = Codecs::H265::Profile::Main;
+        if (auto parameters = codec.h265_parameters(); parameters.has_value())
+            profile = parameters->profile();
         if (!profile.has_value())
             return codec;
         return ParsedCodec { Codecs::H265::canonical_parameters_for_profile(*profile) };
@@ -298,6 +324,12 @@ struct ParameterSetState {
     bool dirty { true };
     // Whether every coded slice of the last frame belongs to a picture nothing will reference.
     bool access_unit_is_non_reference { false };
+    // Whether the last frame's picture is a random access point, which the pictures following it are associated with.
+    bool access_unit_is_random_access_point { false };
+    // Whether that random access point's leading pictures may reference pictures that precede it.
+    bool access_unit_begins_open_gop { false };
+    // Whether the last frame's picture is such a leading picture.
+    bool access_unit_is_open_gop_leading_picture { false };
 };
 
 struct H264State final : ParameterSetState {
@@ -389,9 +421,7 @@ struct H264State final : ParameterSetState {
         if (CMVideoFormatDescriptionCreateFromH264ParameterSets(kCFAllocatorDefault, set_pointers.size(), set_pointers.data(), set_sizes.data(), nal_unit_length_size, &description) != noErr)
             return {};
 
-        RetainedRef<CFMutableDictionaryRef> specification { CFDictionaryCreateMutable(kCFAllocatorDefault, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks) };
-        CFDictionarySetValue(specification.ref(), kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder, kCFBooleanTrue);
-        return DecoderFormat { RetainedRef<CMVideoFormatDescriptionRef> { description }, move(specification), destination_attributes_for_bit_depth(8), CodingIndependentCodePoints {}, reorder_frame_count };
+        return DecoderFormat { RetainedRef<CMVideoFormatDescriptionRef> { description }, decoder_specification_for_codec(CodecID::H264), destination_attributes_for_bit_depth(8), CodingIndependentCodePoints {}, reorder_frame_count };
     }
 };
 
@@ -421,6 +451,9 @@ struct H265State final : ParameterSetState {
 
         auto saw_coded_slice = false;
         auto every_coded_slice_is_sub_layer_non_reference = true;
+        auto saw_random_access_point = false;
+        auto saw_open_gop_start = false;
+        auto saw_open_gop_leading_picture = false;
         u8 slice_temporal_id = 0;
         Codecs::NALUnitIterator iterator { coded_frame.data(), nal_unit_length_size };
         for (auto nal_unit = iterator.next(); nal_unit.has_value(); nal_unit = iterator.next()) {
@@ -430,6 +463,12 @@ struct H265State final : ParameterSetState {
                 continue;
             saw_coded_slice = true;
             slice_temporal_id = max(slice_temporal_id, header->temporal_id);
+            if (Codecs::H265::is_random_access_point(*header))
+                saw_random_access_point = true;
+            if (Codecs::H265::has_random_access_skipped_leading_pictures(*header))
+                saw_open_gop_start = true;
+            if (Codecs::H265::is_random_access_skipped_leading(*header))
+                saw_open_gop_leading_picture = true;
             if (!Codecs::H265::is_sub_layer_non_reference(*header))
                 every_coded_slice_is_sub_layer_non_reference = false;
         }
@@ -438,6 +477,9 @@ struct H265State final : ParameterSetState {
         // ITU-T H.265 (07/2024), 7.4.2.2: an SLNR picture is only discardable for pictures at its own TemporalId.
         access_unit_is_non_reference = saw_coded_slice && every_coded_slice_is_sub_layer_non_reference
             && slice_temporal_id == highest_temporal_id();
+        access_unit_is_random_access_point = saw_random_access_point;
+        access_unit_begins_open_gop = saw_open_gop_start;
+        access_unit_is_open_gop_leading_picture = saw_open_gop_leading_picture;
         return {};
     }
 
@@ -522,9 +564,7 @@ struct H265State final : ParameterSetState {
         if (CMVideoFormatDescriptionCreateFromHEVCParameterSets(kCFAllocatorDefault, set_pointers.size(), set_pointers.data(), set_sizes.data(), nal_unit_length_size, nullptr, &description) != noErr)
             return {};
 
-        RetainedRef<CFMutableDictionaryRef> specification { CFDictionaryCreateMutable(kCFAllocatorDefault, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks) };
-        CFDictionarySetValue(specification.ref(), kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder, kCFBooleanTrue);
-        return DecoderFormat { RetainedRef<CMVideoFormatDescriptionRef> { description }, move(specification), destination_attributes_for_bit_depth(bit_depth), CodingIndependentCodePoints {}, reorder_frame_count };
+        return DecoderFormat { RetainedRef<CMVideoFormatDescriptionRef> { description }, decoder_specification_for_codec(CodecID::H265), destination_attributes_for_bit_depth(bit_depth), CodingIndependentCodePoints {}, reorder_frame_count };
     }
 };
 
@@ -580,22 +620,23 @@ static Optional<DecoderFormat> decoder_format_for_parsed_codec(ParsedCodec const
     }
 }
 
-static bool hardware_can_decode(ParsedCodec const& codec)
+static Optional<DecoderCapabilities> probe_decoder_capabilities(ParsedCodec const& codec)
 {
     auto codec_type = codec_type_from_codec_id(codec.codec_id());
     VTRegisterSupplementalVideoDecoderIfAvailable(codec_type);
 
     auto format = decoder_format_for_parsed_codec(codec);
     if (!format.has_value())
-        return false;
+        return {};
 
     VTDecompressionSessionRef session = nullptr;
     if (VTDecompressionSessionCreate(kCFAllocatorDefault, format->description.ref(), format->specification.ref(), format->destination_attributes.ref(), nullptr, &session) != noErr)
-        return false;
+        return {};
 
+    auto uses_hardware = hardware_decoding_is_required(codec.codec_id()) || session_uses_hardware_decoder(session);
     VTDecompressionSessionInvalidate(session);
     CFRelease(session);
-    return true;
+    return DecoderCapabilities { .smooth = true, .power_efficient = uses_hardware };
 }
 
 Optional<DecoderCapabilities> VideoToolboxVideoDecoder::capabilities(ParsedCodec const& codec)
@@ -607,17 +648,16 @@ Optional<DecoderCapabilities> VideoToolboxVideoDecoder::capabilities(ParsedCodec
 
     // Building a session to answer this costs enough that the answer is worth keeping.
     static NeverDestroyed<Mutex> support_mutex;
-    static NeverDestroyed<HashMap<ParsedCodec, bool>> support_by_format;
+    static NeverDestroyed<HashMap<ParsedCodec, Optional<DecoderCapabilities>>> capabilities_by_format;
 
     MutexLocker locker { *support_mutex };
-    auto cached_support = support_by_format->get(support_key);
-    auto supported = cached_support.has_value() ? *cached_support : hardware_can_decode(support_key);
-    if (!cached_support.has_value())
-        support_by_format->set(support_key, supported);
+    auto cached_capabilities = capabilities_by_format->get(support_key);
+    if (cached_capabilities.has_value())
+        return *cached_capabilities;
 
-    if (!supported)
-        return {};
-    return DecoderCapabilities { .smooth = true, .power_efficient = true };
+    auto capabilities = probe_decoder_capabilities(support_key);
+    capabilities_by_format->set(support_key, capabilities);
+    return capabilities;
 }
 
 DecoderErrorOr<NonnullOwnPtr<VideoToolboxVideoDecoder>> VideoToolboxVideoDecoder::try_create(CodecID codec_id, ReadonlyBytes codec_initialization_data)
@@ -708,7 +748,7 @@ DecoderErrorOr<void> VideoToolboxVideoDecoder::ensure_session_for_frame(CodedFra
         session.ptr()
     };
     if (VTDecompressionSessionCreate(kCFAllocatorDefault, session->format_description, format->specification.ref(), format->destination_attributes.ref(), &callback, &session->session) != noErr)
-        return DecoderError::with_description(DecoderErrorCategory::NotImplemented, "VideoToolbox has no hardware decoder for this format"sv);
+        return DecoderError::with_description(DecoderErrorCategory::NotImplemented, "VideoToolbox has no decoder for this format"sv);
 
     {
         MutexLocker locker { m_output_mutex };
@@ -717,6 +757,7 @@ DecoderErrorOr<void> VideoToolboxVideoDecoder::ensure_session_for_frame(CodedFra
     if (m_parameter_set_state)
         m_parameter_set_state->dirty = false;
     m_session = move(session);
+    m_awaiting_first_submitted_frame = true;
     return {};
 }
 
@@ -796,6 +837,15 @@ DecoderErrorOr<void> VideoToolboxVideoDecoder::receive_coded_data(CodedFrame con
 
     TRY(ensure_session_for_frame(coded_frame));
 
+    if (m_parameter_set_state) {
+        if (m_parameter_set_state->access_unit_begins_open_gop)
+            m_discarding_open_gop_leading_pictures = m_awaiting_first_submitted_frame;
+        else if (m_parameter_set_state->access_unit_is_random_access_point)
+            m_discarding_open_gop_leading_pictures = false;
+        if (m_discarding_open_gop_leading_pictures && m_parameter_set_state->access_unit_is_open_gop_leading_picture)
+            return {};
+    }
+
     if (intent == DecodeIntent::Reference) {
         if (m_parameter_set_state && m_parameter_set_state->access_unit_is_non_reference)
             return {};
@@ -847,6 +897,7 @@ DecoderErrorOr<void> VideoToolboxVideoDecoder::receive_coded_data(CodedFrame con
         note_frame_left_the_media_engine_while_locked();
         return DecoderError::format(DecoderErrorCategory::Corrupted, "VideoToolbox rejected a frame with status {}", status);
     }
+    m_awaiting_first_submitted_frame = false;
     return {};
 }
 
@@ -924,6 +975,7 @@ DecoderErrorOr<NonnullRefPtr<VideoFrame>> VideoToolboxVideoDecoder::adopt_output
 void VideoToolboxVideoDecoder::flush()
 {
     m_reached_end_of_stream = false;
+    m_awaiting_first_submitted_frame = true;
 
     MutexLocker locker { m_output_mutex };
     m_generation.fetch_add(1, AK::MemoryOrder::memory_order_relaxed);

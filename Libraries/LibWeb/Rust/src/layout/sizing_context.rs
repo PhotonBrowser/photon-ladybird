@@ -13,6 +13,30 @@ pub(crate) struct AtomicRootInlineSizeResolution {
 }
 
 #[derive(Clone, Copy)]
+pub(crate) struct AtomicInlineContribution {
+    pub(crate) content_inline_size: CssPixels,
+    pub(crate) min_content_inline_size: Option<CssPixels>,
+    pub(crate) margin_start: CssPixels,
+    pub(crate) border_start: CssPixels,
+    pub(crate) padding_start: CssPixels,
+    pub(crate) padding_end: CssPixels,
+    pub(crate) border_end: CssPixels,
+    pub(crate) margin_end: CssPixels,
+}
+
+impl AtomicInlineContribution {
+    pub(crate) fn inline_advance(&self, content_inline_size: CssPixels) -> CssPixels {
+        line_box::inline_advance(
+            self.margin_start,
+            self.border_start + self.padding_start,
+            content_inline_size,
+            self.padding_end + self.border_end,
+            self.margin_end,
+        )
+    }
+}
+
+#[derive(Clone, Copy)]
 pub(crate) struct TableWrapperBlockSizes {
     pub(crate) table_box_border_box_block_size: CssPixels,
     /// The table box plus its captions.
@@ -56,12 +80,8 @@ impl<'pass> SizingContext<'pass> {
     }
 
     #[track_caller]
-    fn used(&self, node: Node) -> std::rc::Rc<UsedValues> {
+    fn used(&self, node: Node) -> &'pass UsedValues {
         self.records.used_values(node)
-    }
-
-    fn parent(&self, node: Node) -> Node {
-        self.callbacks.parent(node)
     }
 
     fn first_child(&self, node: Node) -> Node {
@@ -750,13 +770,8 @@ impl<'pass> SizingContext<'pass> {
         false
     }
 
-    pub(crate) fn is_anonymous_button_content_wrapper(&self, node: Node) -> bool {
-        let parent = self.parent(node);
-        self.facts(node).is_anonymous() && !parent.is_invalid() && self.facts(parent).uses_button_layout()
-    }
-
-    fn forwards_button_percentage_block_basis(&self, node: Node) -> bool {
-        self.is_anonymous_button_content_wrapper(node) || self.is_anonymous_button_content_box(node)
+    fn forwards_button_percentage_block_basis(facts: &NodeFacts<'_>) -> bool {
+        facts.is_anonymous_button_content_wrapper() || facts.is_anonymous_button_content_box()
     }
 
     fn anonymous_button_content_box(&self, button: Node) -> Option<Node> {
@@ -765,16 +780,7 @@ impl<'pass> SizingContext<'pass> {
             return None;
         }
         let content_box = self.first_child(wrapper);
-        (!content_box.is_invalid() && self.is_anonymous_button_content_box(content_box)).then_some(content_box)
-    }
-
-    pub(crate) fn is_anonymous_button_content_box(&self, node: Node) -> bool {
-        let parent = self.parent(node);
-        self.facts(node).is_anonymous()
-            && !parent.is_invalid()
-            && self.facts(parent).is_anonymous()
-            && !self.parent(parent).is_invalid()
-            && self.facts(self.parent(parent)).uses_button_layout()
+        (!content_box.is_invalid() && self.facts(content_box).is_anonymous_button_content_box()).then_some(content_box)
     }
 
     pub(crate) fn constraints_for_child_context(
@@ -803,7 +809,7 @@ impl<'pass> SizingContext<'pass> {
         } else {
             None
         };
-        let forwards_button_content_block_basis = self.forwards_button_percentage_block_basis(containing_block);
+        let forwards_button_content_block_basis = Self::forwards_button_percentage_block_basis(&facts);
         // https://www.w3.org/TR/CSS22/visuren.html#anonymous-block-level
         // Anonymous block boxes are ignored when resolving percentage values that would refer to it:
         // the closest non-anonymous ancestor box is used instead.
@@ -931,7 +937,7 @@ impl<'pass> SizingContext<'pass> {
             && facts.is_block_container()
             && !facts.is_table_wrapper();
         svg_root_forwards_quirks_basis
-            || self.forwards_button_percentage_block_basis(node)
+            || Self::forwards_button_percentage_block_basis(&facts)
             || forwards_block_basis_as_anonymous_box
             || forwards_quirks_basis_as_auto_height_block_container
     }
@@ -965,7 +971,11 @@ impl<'pass> SizingContext<'pass> {
         style.width().contains_percentage()
             || style.min_width().contains_percentage()
             || style.max_width().contains_percentage()
-            || style.padding_left().contains_percentage()
+            || Self::box_edges_contain_percentage(style)
+    }
+
+    fn box_edges_contain_percentage(style: StyleValues<'_>) -> bool {
+        style.padding_left().contains_percentage()
             || style.padding_right().contains_percentage()
             || style.padding_top().contains_percentage()
             || style.padding_bottom().contains_percentage()
@@ -1075,19 +1085,12 @@ impl<'pass> SizingContext<'pass> {
             // height. The quirk applies to DOM elements only (not anonymous boxes), and excludes
             // table-related display types.
             if !facts.is_absolutely_positioned() {
-                let parent = self.parent(node);
-                let parent_is_flex_or_grid = if parent.is_invalid() {
-                    false
-                } else {
-                    let display = self.facts(parent).display();
-                    display.is_flex_inside() || display.is_grid_inside()
-                };
                 // Flex/grid items resolve percentage heights against their container, not via quirk.
                 // The quirk should not apply inside user agent shadow trees.
                 let quirk_applies = facts.document_in_quirks_mode()
                     && !facts.is_anonymous()
                     && !facts.is_table_box()
-                    && !parent_is_flex_or_grid
+                    && !facts.parent_is_flex_or_grid_container()
                     && !facts.is_in_user_agent_shadow_tree();
                 if !quirk_applies && constraints.percentage_basis_block_size.is_none() {
                     return true;
@@ -1498,6 +1501,110 @@ impl<'pass> SizingContext<'pass> {
             .set(style.margin_bottom().to_px(containing_inline_size));
     }
 
+    pub(crate) fn dimension_empty_atomic_root(
+        &self,
+        node: Node,
+        available_space: AvailableSpace,
+        constraints: ContainingBlockConstraints,
+        layout_mode: LayoutMode,
+    ) {
+        if layout_mode == LayoutMode::Normal && !self.purpose.is_measurement() {
+            match fc_run_cache::fc_run_cache_mode_from_environment() {
+                fc_run_cache::FcRunCacheMode::Enabled if self.try_reuse_empty_atomic_root_metrics(node) => return,
+                fc_run_cache::FcRunCacheMode::Shadow => {
+                    self.dimension_empty_atomic_root_with_shadow_comparison(node, available_space, constraints);
+                    return;
+                }
+                _ => {}
+            }
+        }
+        self.dimension_empty_atomic_root_fresh(node, available_space, constraints, layout_mode);
+    }
+
+    #[cold]
+    fn dimension_empty_atomic_root_with_shadow_comparison(
+        &self,
+        node: Node,
+        available_space: AvailableSpace,
+        constraints: ContainingBlockConstraints,
+    ) {
+        let used = self.used(node);
+        let initial = used_values::UsedValuesCellState::capture(used);
+        let reused = self.try_reuse_empty_atomic_root_metrics(node);
+        let cached = used_values::UsedValuesCellState::capture(used);
+        initial.apply_to_record(used);
+        self.dimension_empty_atomic_root_fresh(node, available_space, constraints, LayoutMode::Normal);
+        if reused {
+            assert_eq!(
+                cached,
+                used_values::UsedValuesCellState::capture(used),
+                "empty atomic sizing shadow diverged for slot {}",
+                node.slot_index()
+            );
+        }
+    }
+
+    fn try_reuse_empty_atomic_root_metrics(&self, node: Node) -> bool {
+        let facts = self.facts(node);
+        debug_assert!(
+            formatting_context::formatting_context_type_created_by_box(facts)
+                == Some(formatting_context::FormattingContextType::Block)
+        );
+        if facts.data().kind.get() != NodeKind::BlockContainer
+            || facts.is_anonymous()
+            || facts.is_native_form_control_box()
+            || facts.is_html_html_element()
+            || facts.is_html_body_element()
+            || facts.is_scroll_container()
+            || !self.block_root_inline_size_follows_from_style(node)
+        {
+            return false;
+        }
+        let style = self.style(node);
+        if !(style.width().is_auto() || style.width().is_length())
+            || !(style.height().is_auto() || style.height().is_length())
+            || !(style.min_width().is_auto() || style.min_width().is_length())
+            || !(style.min_height().is_auto() || style.min_height().is_length())
+            || !(style.max_width().is_none() || style.max_width().is_length())
+            || !(style.max_height().is_none() || style.max_height().is_length())
+            || Self::box_edges_contain_percentage(style)
+        {
+            return false;
+        }
+        let used = self.used(node);
+        if used.inline_size_constraint.get() != SizeConstraint::None
+            || used.block_size_constraint.get() != SizeConstraint::None
+        {
+            return false;
+        }
+        self.callbacks
+            .arena()
+            .with_current_committed_fragment(node, |fragment| used.set_box_metrics_from_fragment(fragment))
+            .is_some()
+    }
+
+    fn dimension_empty_atomic_root_fresh(
+        &self,
+        node: Node,
+        available_space: AvailableSpace,
+        constraints: ContainingBlockConstraints,
+        layout_mode: LayoutMode,
+    ) {
+        self.dimension_atomic_root(node, available_space, constraints, layout_mode, false);
+        self.resolve_used_block_size_if_treated_as_auto(
+            node,
+            available_space,
+            constraints,
+            Some(CssPixels::default()),
+            || unreachable!("an empty atomic block has a zero automatic content block size"),
+        );
+        if layout_mode == LayoutMode::Normal
+            && !self.box_is_sized_as_replaced_element(node, available_space, constraints)
+        {
+            self.resolve_used_block_size_if_not_treated_as_auto(node, available_space, constraints);
+        }
+    }
+
     pub(crate) fn dimension_atomic_root(
         &self,
         node: Node,
@@ -1678,6 +1785,48 @@ impl<'pass> SizingContext<'pass> {
             content_inline_size: inline_size,
             width_was_treated_as_auto,
             max_content_size_that_fit_the_definite_available_inner_space,
+        }
+    }
+
+    pub(crate) fn atomic_inline_size_follows_from_style(&self, node: Node) -> bool {
+        formatting_context::independent_formatting_context_type(node, &self.callbacks)
+            == formatting_context::FormattingContextType::Block
+            && self.block_root_inline_size_follows_from_style(node)
+    }
+
+    fn block_root_inline_size_follows_from_style(&self, node: Node) -> bool {
+        let facts = self.facts(node);
+        self.style(node).writing_mode() == writing_mode::HORIZONTAL_TB
+            && !facts.has_preferred_aspect_ratio()
+            && !facts.has_auto_content_box_size()
+            && !facts.uses_button_layout()
+            && !facts.is_table_wrapper()
+            && !facts.is_fieldset_box()
+    }
+
+    pub(crate) fn atomic_inline_contribution(
+        &self,
+        node: Node,
+        available_space: AvailableSpace,
+        constraints: ContainingBlockConstraints,
+    ) -> AtomicInlineContribution {
+        let style = self.style(node);
+        let basis = available_space.inline_size.to_px_or_zero();
+        AtomicInlineContribution {
+            content_inline_size: self
+                .calculate_atomic_root_content_inline_size(node, available_space, constraints, None)
+                .content_inline_size,
+            min_content_inline_size: self.paired_min_content_inline_size_for_atomic_root(
+                node,
+                available_space,
+                constraints,
+            ),
+            margin_start: style.margin_left().to_px(basis),
+            border_start: style.border_left_width(),
+            padding_start: style.padding_left().to_px(basis),
+            padding_end: style.padding_right().to_px(basis),
+            border_end: style.border_right_width(),
+            margin_end: style.margin_right().to_px(basis),
         }
     }
 
@@ -1882,7 +2031,7 @@ impl<'pass> SizingContext<'pass> {
             first: measurement.has_first_baseline.then_some(measurement.first_baseline),
             last: measurement.has_last_baseline.then_some(measurement.last_baseline),
         };
-        formatting_context::store_derived_baselines(&used, baselines);
+        formatting_context::store_derived_baselines(used, baselines);
         Some((measurement.automatic_content_block_size, baselines))
     }
 
@@ -2260,8 +2409,14 @@ impl<'pass> SizingContext<'pass> {
             AvailableSize::Indefinite
         };
         if kind == IntrinsicSizeCacheKind::MaxContentInline
-            && let Some(sizes) =
-                intrinsic_sizing::compute_inline_sizes(self.callbacks, node, root.clone(), constraints, block_size)
+            && let Some(sizes) = intrinsic_sizing::compute_inline_sizes(
+                self.callbacks,
+                node,
+                self.callbacks.in_flow_containing_block(node),
+                &root,
+                constraints,
+                block_size,
+            )
         {
             self.charge_measurement_dependency_to_measured_box_and_containing_block(
                 node,
@@ -2561,7 +2716,8 @@ impl<'pass> SizingContext<'pass> {
         RunRecords::with_root(
             measurement.callbacks().arena(),
             table_box,
-            table_used.clone(),
+            measurement.callbacks().in_flow_containing_block(table_box),
+            &table_used,
             |records| {
                 let table_run = FormattingContextRun {
                     purpose: formatting_context::LayoutPurpose::Measurement,
@@ -2809,16 +2965,9 @@ impl<'pass> SizingContext<'pass> {
             // https://quirks.spec.whatwg.org/#the-percentage-height-calculation-quirk
             // NOTE: Flex/grid items resolve percentage heights against their container, not via quirk.
             let facts = self.facts(node);
-            let parent = self.parent(node);
-            let parent_is_flex_or_grid = if parent.is_invalid() {
-                false
-            } else {
-                let display = self.facts(parent).display();
-                display.is_flex_inside() || display.is_grid_inside()
-            };
             if facts.document_in_quirks_mode()
                 && !facts.is_anonymous()
-                && !parent_is_flex_or_grid
+                && !facts.parent_is_flex_or_grid_container()
                 && !facts.is_in_user_agent_shadow_tree()
             {
                 basis = constraints.quirks_mode_percentage_basis_block_size.unwrap_or_default();

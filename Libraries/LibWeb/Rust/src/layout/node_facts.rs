@@ -91,9 +91,9 @@ pub(crate) fn node_can_have_children(data: &NodeData) -> bool {
     }
 }
 
-/// Whether a box's in-flow descendants name it as their containing block. This is the question LayoutNodeArena answers
-/// when it assigns containing blocks, so anything that walks past a box on behalf of an enclosing formatting context
-/// has to ask it too: the boxes inside such a box are laid out against it, not against the block container of the
+/// Whether a box's in-flow descendants name it as their containing block. This is the question the walks that find
+/// in-flow containing blocks ask, so anything that walks past a box on behalf of an enclosing formatting context has
+/// to ask it too: the boxes inside such a box are laid out against it, not against the block container of the
 /// context the walk started in.
 pub(crate) fn node_forms_containing_block_for_children(data: &NodeData, style: Option<ComputedValuesView<'_>>) -> bool {
     if kind_is_block_container(data.kind.get()) && !node_is_fragmented_inline(data, style) {
@@ -144,12 +144,12 @@ pub(crate) fn node_has_auto_content_box_size(data: &NodeData) -> bool {
 // https://developer.mozilla.org/en-US/docs/Web/Guide/CSS/Block_formatting_context
 // ComputedValuesView::own_style_establishes_block_formatting_context covers
 // computed-style-only terms; this composite adds the terms that need the node
-// kind, stamped DOM identity, the live IsFlexItem flag, or the parent's
-// display.
+// kind, stamped DOM identity, the live IsFlexItem flag, or whether the parent
+// is a flex or grid container.
 pub(crate) fn node_creates_block_formatting_context(
     data: &NodeData,
     style: Option<ComputedValuesView<'_>>,
-    parent_style: Option<ComputedValuesView<'_>>,
+    parent_is_flex_or_grid_container: bool,
 ) -> bool {
     if kind_is_replaced_box(data.kind.get()) {
         return false;
@@ -186,7 +186,21 @@ pub(crate) fn node_creates_block_formatting_context(
     {
         return true;
     }
-    parent_style.is_some_and(|parent| parent.display().is_flex_inside() || parent.display().is_grid_inside())
+    parent_is_flex_or_grid_container
+}
+
+pub(crate) fn node_is_flex_or_grid_container(style: Option<ComputedValuesView<'_>>) -> bool {
+    style.is_some_and(|style| style.display().is_flex_inside() || style.display().is_grid_inside())
+}
+
+pub(crate) fn node_applies_text_overflow_ellipsis(style: Option<ComputedValuesView<'_>>) -> bool {
+    style.is_some_and(|style| {
+        style.text_overflow() == text_overflow::ELLIPSIS && style.overflow_x() != overflow::VISIBLE
+    })
+}
+
+pub(crate) fn has_ancestor_fact(data: &NodeData, fact: AncestorFact) -> bool {
+    data.ancestor_facts.get() & fact as u8 != 0
 }
 
 pub(crate) fn construction_flags(facts: &FfiNodeConstructionFacts) -> u32 {
@@ -209,6 +223,14 @@ pub(crate) fn construction_flags(facts: &FfiNodeConstructionFacts) -> u32 {
     .into_iter()
     .filter(|(_, is_set)| *is_set)
     .fold(0, |flags, (flag, _)| flags | flag as u32)
+}
+
+pub(crate) fn containing_block_establishment_flag(is_fixed_position: bool) -> NodeFlag {
+    if is_fixed_position {
+        NodeFlag::EstablishesFixedPositionContainingBlock
+    } else {
+        NodeFlag::EstablishesAbsolutePositionContainingBlock
+    }
 }
 
 pub(crate) fn has_flag(data: &NodeData, flag: NodeFlag) -> bool {
@@ -410,6 +432,11 @@ impl<'pass> NodeFacts<'pass> {
             .is_some_and(|style| style.is_absolutely_positioned())
     }
 
+    pub(crate) fn is_fixed_position(&self) -> bool {
+        self.computed_values_view_if_styled()
+            .is_some_and(|style| style.position() == crate::css::css_enums::positioning::FIXED)
+    }
+
     pub(crate) fn is_relatively_positioned(&self) -> bool {
         self.computed_values_view_if_styled()
             .is_some_and(|style| style.position() == crate::css::css_enums::positioning::RELATIVE)
@@ -568,8 +595,32 @@ impl<'pass> NodeFacts<'pass> {
         node_creates_block_formatting_context(
             self.data(),
             self.computed_values_view_if_styled(),
-            self.parent_computed_values_view_if_styled(),
+            self.parent_is_flex_or_grid_container(),
         )
+    }
+
+    pub(crate) fn parent_is_flex_or_grid_container(&self) -> bool {
+        has_ancestor_fact(self.data(), AncestorFact::ParentIsFlexOrGridContainer)
+    }
+
+    pub(crate) fn parent_is_unfloated_flow_container(&self) -> bool {
+        has_ancestor_fact(self.data(), AncestorFact::ParentIsUnfloatedFlowContainer)
+    }
+
+    pub(crate) fn is_anonymous_button_content_wrapper(&self) -> bool {
+        has_ancestor_fact(self.data(), AncestorFact::IsAnonymousButtonContentWrapper)
+    }
+
+    pub(crate) fn is_anonymous_button_content_box(&self) -> bool {
+        has_ancestor_fact(self.data(), AncestorFact::IsAnonymousButtonContentBox)
+    }
+
+    pub(crate) fn has_inline_level_inclusive_ancestor(&self) -> bool {
+        has_ancestor_fact(self.data(), AncestorFact::HasInlineLevelInclusiveAncestor)
+    }
+
+    pub(crate) fn inherits_text_overflow_ellipsis(&self) -> bool {
+        has_ancestor_fact(self.data(), AncestorFact::InheritsTextOverflowEllipsis)
     }
 
     pub(crate) fn is_editing_host(&self) -> bool {

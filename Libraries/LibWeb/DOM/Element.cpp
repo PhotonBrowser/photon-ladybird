@@ -135,7 +135,6 @@
 #include <LibWeb/Infra/CharacterTypes.h>
 #include <LibWeb/Infra/Strings.h>
 #include <LibWeb/IntersectionObserver/IntersectionObserver.h>
-#include <LibWeb/Layout/BlockContainer.h>
 #include <LibWeb/Layout/TreeBuilder.h>
 #include <LibWeb/Layout/Viewport.h>
 #include <LibWeb/Loader/ContentBlocker.h>
@@ -1268,14 +1267,14 @@ Layout::NodeWithStyle* Element::create_layout_node_for_display_type(DOM::Documen
         return &Layout::allocate_layout_node<Layout::Box>(document, element, style);
 
     if (display.is_list_item())
-        return &Layout::allocate_layout_node<Layout::BlockContainer>(document, element, style, Layout::RustFFI::NodeKind::ListItemBox);
+        return &Layout::allocate_layout_node<Layout::Box>(document, element, style, Layout::RustFFI::NodeKind::ListItemBox);
 
     if (display.is_table_cell())
-        return &Layout::allocate_layout_node<Layout::BlockContainer>(document, element, style);
+        return &Layout::allocate_layout_node<Layout::Box>(document, element, style, Layout::RustFFI::NodeKind::BlockContainer);
 
     if (display.is_table_column() || display.is_table_column_group() || display.is_table_caption()) {
         // FIXME: This is just an incorrect placeholder until we improve table layout support.
-        return &Layout::allocate_layout_node<Layout::BlockContainer>(document, element, style);
+        return &Layout::allocate_layout_node<Layout::Box>(document, element, style, Layout::RustFFI::NodeKind::BlockContainer);
     }
 
     if (display.is_math_inside()) {
@@ -1283,12 +1282,12 @@ Layout::NodeWithStyle* Element::create_layout_node_for_display_type(DOM::Documen
         // MathML elements with a computed display value equal to block math or inline math control box generation
         // and layout according to their tag name, as described in the relevant sections.
         // FIXME: Figure out what kind of node we should make for them. For now, we'll stick with a generic Box.
-        return &Layout::allocate_layout_node<Layout::BlockContainer>(document, element, style);
+        return &Layout::allocate_layout_node<Layout::Box>(document, element, style, Layout::RustFFI::NodeKind::BlockContainer);
     }
 
     if (display.is_inline_outside()) {
         if (display.is_flow_root_inside())
-            return &Layout::allocate_layout_node<Layout::BlockContainer>(document, element, style);
+            return &Layout::allocate_layout_node<Layout::Box>(document, element, style, Layout::RustFFI::NodeKind::BlockContainer);
         if (display.is_flow_inside())
             return &Layout::allocate_layout_node<Layout::NodeWithStyle>(document, element, style, Layout::RustFFI::NodeKind::InlineNode);
         if (display.is_flex_inside())
@@ -1303,13 +1302,13 @@ Layout::NodeWithStyle* Element::create_layout_node_for_display_type(DOM::Documen
         return &Layout::allocate_layout_node<Layout::Box>(document, element, style);
 
     if (display.is_flow_inside() || display.is_flow_root_inside())
-        return &Layout::allocate_layout_node<Layout::BlockContainer>(document, element, style);
+        return &Layout::allocate_layout_node<Layout::Box>(document, element, style, Layout::RustFFI::NodeKind::BlockContainer);
 
     dbgln("FIXME: CSS display '{}' not implemented yet.", display.to_string());
 
     // FIXME: We don't actually support `display: block ruby`, this is just a hack to prevent a crash
     if (display.is_ruby_inside())
-        return &Layout::allocate_layout_node<Layout::BlockContainer>(document, element, style);
+        return &Layout::allocate_layout_node<Layout::Box>(document, element, style, Layout::RustFFI::NodeKind::BlockContainer);
 
     return &Layout::allocate_layout_node<Layout::NodeWithStyle>(document, element, style, Layout::RustFFI::NodeKind::InlineNode);
 }
@@ -1827,7 +1826,7 @@ void Element::set_needs_layout_tree_rebuild(SetNeedsLayoutTreeUpdateReason reaso
         set_needs_layout_tree_update(true, reason);
         return;
     }
-    if (auto parent = parent_element())
+    if (auto* parent = parent_or_shadow_host_element())
         parent->set_needs_layout_tree_update(true, reason);
     else
         set_needs_layout_tree_update(true, reason);
@@ -1955,8 +1954,9 @@ bool Element::apply_box_presence_change_in_place(SetNeedsLayoutTreeUpdateReason 
 {
     if (is_html_html_element() || is_html_body_element() || rendered_in_top_layer() || is<SVG::SVGElement>(*this))
         return false;
-    GC::Ptr<Element> parent = parent_element();
-    if (!parent || parent->shadow_root() || assigned_slot() || is<HTML::HTMLSlotElement>(*parent))
+    bool is_shadow_root_child = is<ShadowRoot>(this->parent());
+    GC::Ptr<Element> parent = parent_or_shadow_host_element();
+    if (!parent || (parent->shadow_root() && !is_shadow_root_child) || assigned_slot() || is<HTML::HTMLSlotElement>(*parent))
         return false;
     auto* parent_layout_node = parent->unsafe_layout_node();
     if (!parent_layout_node)
@@ -1992,7 +1992,7 @@ bool Element::apply_box_presence_change_in_place(SetNeedsLayoutTreeUpdateReason 
         return true;
     }
 
-    if (unsafe_layout_node())
+    if (unsafe_layout_node() || is_shadow_root_child)
         return false;
     if (style->position() == CSS::Positioning::Fixed || style->float_() != CSS::Float::None)
         return false;
@@ -2104,6 +2104,22 @@ void Element::record_style_query_custom_property_reference(Optional<CSS::PseudoE
         return;
     }
     consumer_data.style_query_references.append(name);
+}
+
+void Element::set_style_uses_if_css_function()
+{
+    if (m_style_uses_if_css_function)
+        return;
+    m_style_uses_if_css_function = true;
+    document().add_element_with_viewport_dependent_style(*this);
+}
+
+void Element::set_style_depends_on_viewport_metrics()
+{
+    if (m_style_depends_on_viewport_metrics)
+        return;
+    m_style_depends_on_viewport_metrics = true;
+    document().add_element_with_viewport_dependent_style(*this);
 }
 
 void Element::finish_recording_style_dependencies()

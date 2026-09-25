@@ -312,6 +312,68 @@ TEST_CASE(aac_configuration_record_rejects_a_truncated_config)
     EXPECT(!Media::Codecs::AAC::parse_configuration_record(escaped_without_extension, 0x40).has_value());
 }
 
+TEST_CASE(aac_configuration_record_is_created_from_stream_parameters)
+{
+    auto low_complexity = TRY_OR_FAIL(Media::Codecs::AAC::create_configuration_record(Media::Codecs::AAC::LOW_COMPLEXITY_AUDIO_OBJECT_TYPE, 48000, 2));
+    Array<u8, 2> expected_low_complexity { 0x11, 0x90 };
+    EXPECT_EQ(low_complexity.span(), expected_low_complexity.span());
+
+    // A stream that upsamples names its extension's rate after the core configuration.
+    auto spectral_band_replication = TRY_OR_FAIL(Media::Codecs::AAC::create_configuration_record(Media::Codecs::AAC::LOW_COMPLEXITY_AUDIO_OBJECT_TYPE, 24000, 2, 48000));
+    Array<u8, 5> expected_spectral_band_replication { 0x13, 0x10, 0x56, 0xe5, 0x98 };
+    EXPECT_EQ(spectral_band_replication.span(), expected_spectral_band_replication.span());
+}
+
+TEST_CASE(aac_configuration_record_escapes_a_sample_rate_it_cannot_name)
+{
+    auto configuration = TRY_OR_FAIL(Media::Codecs::AAC::create_configuration_record(Media::Codecs::AAC::LOW_COMPLEXITY_AUDIO_OBJECT_TYPE, 37800, 1));
+
+    // The escaped index is followed by the rate itself, then the channel configuration.
+    Array<u8, 5> expected { 0x17, 0x80, 0x49, 0xd4, 0x08 };
+    EXPECT_EQ(configuration.span(), expected.span());
+}
+
+TEST_CASE(aac_configuration_record_rejects_channel_counts_it_cannot_describe)
+{
+    EXPECT(Media::Codecs::AAC::create_configuration_record(Media::Codecs::AAC::LOW_COMPLEXITY_AUDIO_OBJECT_TYPE, 48000, 7).is_error());
+    EXPECT(Media::Codecs::AAC::create_configuration_record(Media::Codecs::AAC::LOW_COMPLEXITY_AUDIO_OBJECT_TYPE, 48000, 0).is_error());
+}
+
+TEST_CASE(aac_configuration_record_is_wrapped_in_an_elementary_stream_descriptor)
+{
+    // AAC-LC at 48000 Hz, stereo.
+    Array<u8, 2> audio_specific_config { 0x11, 0x90 };
+
+    auto descriptor = TRY_OR_FAIL(Media::Codecs::AAC::elementary_stream_descriptor_for_configuration_record(audio_specific_config));
+
+    Array<u8, 39> expected {
+        0x03, 0x80, 0x80, 0x80, 0x22,
+        0x00, 0x00, 0x00,
+        0x04, 0x80, 0x80, 0x80, 0x14,
+        0x40, 0x15, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x05, 0x80, 0x80, 0x80, 0x02,
+        0x11, 0x90,
+        0x06, 0x80, 0x80, 0x80, 0x01,
+        0x02
+    };
+    EXPECT_EQ(descriptor.span(), expected.span());
+}
+
+TEST_CASE(aac_elementary_stream_descriptor_omits_an_empty_configuration_record)
+{
+    auto descriptor = TRY_OR_FAIL(Media::Codecs::AAC::elementary_stream_descriptor_for_configuration_record({}));
+
+    Array<u8, 32> expected {
+        0x03, 0x80, 0x80, 0x80, 0x1b,
+        0x00, 0x00, 0x00,
+        0x04, 0x80, 0x80, 0x80, 0x0d,
+        0x40, 0x15, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x06, 0x80, 0x80, 0x80, 0x01,
+        0x02
+    };
+    EXPECT_EQ(descriptor.span(), expected.span());
+}
+
 TEST_CASE(vp9_frame_header_reads_a_keyframe_format)
 {
     // The head of vp9_in_webm.webm's keyframe, whose color space field is unknown.
@@ -849,7 +911,7 @@ TEST_CASE(h264_configuration_rejects_a_three_byte_nal_unit_length_prefix)
 
 TEST_CASE(h264_representative_records_match_the_profiles_they_stand_in_for)
 {
-    for (u8 profile_idc : { 66, 77, 100, 110, 122, 244 }) {
+    for (u8 profile_idc : { 66, 77, 88, 100, 110, 122, 244, 44, 83, 86, 118, 128 }) {
         auto profile = Media::Codecs::H264::Parameters { .profile_idc = profile_idc, .constraint_set_flags = 0, .level_idc = 0 }.profile();
         EXPECT(profile.has_value());
         if (!profile.has_value())
@@ -880,8 +942,8 @@ TEST_CASE(h264_representative_records_match_the_profiles_they_stand_in_for)
             EXPECT(Media::Codecs::H264::parse_picture_parameter_set(sets->picture[0]).has_value());
     }
 
-    // Profiles no record was captured for, and that state no conformance to one, are left unanswerable.
-    for (u8 profile_idc : { 0, 88, 44, 118, 128 })
+    // Profiles no record exists for, and that state no conformance to one, are left unanswerable.
+    for (u8 profile_idc : { 0, 134, 135, 138, 139 })
         EXPECT(!(Media::Codecs::H264::Parameters { .profile_idc = profile_idc, .constraint_set_flags = 0, .level_idc = 0 }.profile().has_value()));
 }
 
@@ -907,19 +969,24 @@ TEST_CASE(h264_profiles_follow_the_constraints_a_stream_states_conformance_to)
     expect_profile(88, CONSTRAINT_SET0_FLAG | CONSTRAINT_SET2_FLAG, Profile::Baseline);
     expect_profile(88, CONSTRAINT_SET1_FLAG, Profile::Main);
 
-    // Conformance to the Extended profile alone leaves nothing to answer with.
-    EXPECT(!profile_of(88, CONSTRAINT_SET2_FLAG).has_value());
+    // A.2.3: only an Extended decoder is required to accept streams flagged constraint_set2, so the flag never
+    // narrows a named profile.
+    expect_profile(88, CONSTRAINT_SET2_FLAG, Profile::Extended);
+    expect_profile(100, CONSTRAINT_SET2_FLAG, Profile::High);
+    expect_profile(77, CONSTRAINT_SET2_FLAG, Profile::Main);
 
     // The most constrained profile stated wins, even when the named one is known.
     expect_profile(100, CONSTRAINT_SET0_FLAG, Profile::Baseline);
     expect_profile(244, CONSTRAINT_SET1_FLAG, Profile::Main);
+    expect_profile(128, CONSTRAINT_SET1_FLAG, Profile::Main);
+    expect_profile(83, CONSTRAINT_SET0_FLAG, Profile::Baseline);
     expect_profile(100, 0, Profile::High);
 }
 
 TEST_CASE(h264_canonical_parameters_resolve_back_to_their_profile)
 {
     using Profile = Media::Codecs::H264::Profile;
-    for (auto profile : { Profile::Baseline, Profile::Main, Profile::High, Profile::High10, Profile::High422, Profile::High444 }) {
+    for (auto profile : { Profile::Baseline, Profile::Main, Profile::Extended, Profile::High, Profile::High10, Profile::High422, Profile::High444, Profile::CAVLC444Intra, Profile::ScalableBaseline, Profile::ScalableHigh, Profile::MultiviewHigh, Profile::StereoHigh }) {
         auto parameters = Media::Codecs::H264::canonical_parameters_for_profile(profile);
         auto resolved = parameters.profile();
         EXPECT(resolved.has_value());

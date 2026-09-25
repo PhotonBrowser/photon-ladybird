@@ -214,7 +214,6 @@
 #include <LibWeb/Infra/SerializedURL.h>
 #include <LibWeb/Infra/Strings.h>
 #include <LibWeb/IntersectionObserver/IntersectionObserver.h>
-#include <LibWeb/Layout/BlockContainer.h>
 #include <LibWeb/Layout/LayoutRustBridge.h>
 #include <LibWeb/Layout/NodeArena.h>
 #include <LibWeb/Layout/TextNode.h>
@@ -675,8 +674,6 @@ Layout::NodeArena& Document::layout_node_arena()
             switch (kind) {
             case Layout::RustFFI::NodeKind::BlockContainer:
             case Layout::RustFFI::NodeKind::TableWrapper:
-                Layout::allocate_layout_node<Layout::BlockContainer>(document, Layout::BindToPreparedArenaSlot::Yes, slot, kind);
-                return;
             case Layout::RustFFI::NodeKind::Box:
                 Layout::allocate_layout_node<Layout::Box>(document, Layout::BindToPreparedArenaSlot::Yes, slot, kind);
                 return;
@@ -2237,19 +2234,17 @@ void Document::invalidate_style_for_viewport_change()
         style_engine.record_element_style_input_change(style_node);
     }
 
-    for_each_shadow_including_inclusive_descendant([](Node& node) {
-        auto* element = as_if<Element>(node);
-        if (!element)
-            return TraversalDecision::Continue;
-
-        // Descendants that inherit changed values are reached by the normal inherited-style reaction path.
-        // Container query conditions that resolved a container unit against the viewport have no
-        // computed-value dependency for the retained style engine to discover.
-        if (element->style_uses_if_css_function() || element->style_depends_on_viewport_metrics())
-            element->document().style_computer().style_engine().record_element_style_input_change(element->style_node_id());
-
-        return TraversalDecision::Continue;
-    });
+    // Descendants that inherit changed values are reached by the normal inherited-style reaction path.
+    // Container query conditions that resolved a container unit against the viewport have no
+    // computed-value dependency for the retained style engine to discover.
+    auto elements = move(m_elements_with_viewport_dependent_style);
+    for (auto& element : elements) {
+        if (&element.document() != this || (!element.style_uses_if_css_function() && !element.style_depends_on_viewport_metrics()))
+            continue;
+        m_elements_with_viewport_dependent_style.set(element);
+        if (element.is_connected())
+            style_engine.record_element_style_input_change(element.style_node_id());
+    }
 }
 
 void Document::sample_animation_effects_needing_style_update()

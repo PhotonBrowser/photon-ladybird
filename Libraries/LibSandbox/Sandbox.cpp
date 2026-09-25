@@ -306,13 +306,22 @@ static ErrorOr<void> append_allowed_mach_services(StringBuilder& builder, Seatbe
         builder.append(R"~~~(
 (allow mach-lookup
     (global-name "com.apple.audio.audiohald")
-    (global-name "com.apple.audio.AudioComponentRegistrar")
     (global-name "com.apple.audio.AudioSession")
     (xpc-service-name "com.apple.audio.SandboxHelper"))
 )~~~"sv);
     }
 
-    if (has_flag(options.system_services, SystemService::VideoDecoding)) {
+    // FIXME: A renderer only needs these because it answers what the platform can decode from within its
+    //        own process, and VideoToolbox answers by building a session. Once media moves to a process of
+    //        its own, ask that process instead and take these away from every renderer.
+    if (has_flag(options.system_services, SystemService::Audio) || has_flag(options.system_services, SystemService::CodecEnumeration)) {
+        builder.append(R"~~~(
+(allow mach-lookup
+    (global-name "com.apple.audio.AudioComponentRegistrar"))
+)~~~"sv);
+    }
+
+    if (has_flag(options.system_services, SystemService::VideoDecoding) || has_flag(options.system_services, SystemService::CodecEnumeration)) {
         builder.append(R"~~~(
 (allow mach-lookup
     (xpc-service-name "com.apple.coremedia.videodecoder"))

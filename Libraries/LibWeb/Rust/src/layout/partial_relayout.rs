@@ -141,7 +141,11 @@ impl LayoutNodeArena {
             .flatten()
             .map(|payloads| crate::css::computed_value_views::ComputedValuesView::new(&payloads.groups));
         matches!(
-            formatting_context_type_created_by_node_data(data, style, parent_style),
+            formatting_context_type_created_by_node_data(
+                data,
+                style,
+                node_facts::node_is_flex_or_grid_container(parent_style)
+            ),
             Some(
                 FormattingContextType::Block
                     | FormattingContextType::Flex
@@ -350,14 +354,12 @@ impl LayoutNodeArena {
 
     pub(crate) fn node_can_replay_saved_abspos_layout_inputs_after_style_change(&self, node: NodeSlotId) -> bool {
         let data = self.data(node);
-
-        if data.containing_block.get().is_invalid() || !self.slot_is_live(data.containing_block.get()) {
-            return false;
-        }
-
         let Some(inputs) = self.saved_abspos_layout_inputs(data) else {
             return false;
         };
+        if inputs.containing_block.is_invalid() || !self.slot_is_live(inputs.containing_block) {
+            return false;
+        }
         if inputs.containing_block_info.derives_from_own_computed_values {
             return false;
         }
@@ -452,12 +454,15 @@ impl LayoutNodeArena {
         let data = self.data(node);
         if !node_facts::kind_is_box(data.kind.get())
             || data.flags.get() & (NodeFlag::Anonymous as u32 | NodeFlag::InsetsUseAnchorFunctions as u32) != 0
-            || !data.inline_containing_block.get().is_invalid()
         {
             return None;
         }
         let parent = data.parent.get();
-        if data.containing_block.get() != parent || !self.anchor_positioning_nodes.borrow().is_empty() {
+        if parent.is_invalid()
+            || !node_facts::has_flag(self.data(parent), NodeFlag::EstablishesAbsolutePositionContainingBlock)
+            || !node_facts::kind_is_box(self.data(parent).kind.get())
+            || !self.anchor_positioning_nodes.borrow().is_empty()
+        {
             return None;
         }
         let style = node_facts::node_style_view(data)?;
@@ -491,7 +496,11 @@ impl LayoutNodeArena {
             .flatten()
             .map(|payloads| crate::css::computed_value_views::ComputedValuesView::new(&payloads.groups));
         if !matches!(
-            formatting_context_type_created_by_node_data(parent_data, parent_style, grandparent_style),
+            formatting_context_type_created_by_node_data(
+                parent_data,
+                parent_style,
+                node_facts::node_is_flex_or_grid_container(grandparent_style)
+            ),
             None | Some(FormattingContextType::Block | FormattingContextType::Flex)
         ) {
             return None;
@@ -500,6 +509,8 @@ impl LayoutNodeArena {
         let padding = crate::painting::paintable_geometry::committed_padding(self, parent);
         let content_size = crate::painting::paintable_geometry::committed_content_size(&self.paintable_rows(), parent);
         Some(AbsposLayoutInputs {
+            containing_block: parent,
+            inline_containing_block: NodeSlotId::INVALID,
             static_position_rect: StaticPositionRect {
                 rect: LogicalRect::default(),
                 inline_alignment: StaticPositionAlignment::Start,
@@ -639,10 +650,7 @@ impl LayoutNodeArena {
             };
             if node_facts::kind_is_box(child_kind) && child_is_anonymous && child_kind != NodeKind::TableWrapper {
                 if fragment_cache_epochs_enabled {
-                    child_data
-                        .fragment_cache_epoch
-                        .set(child_data.fragment_cache_epoch.get().wrapping_add(1));
-                    self.fc_run_cache_store().note_invalidated_entry(child);
+                    self.bump_fragment_cache_epoch_below_bumped_parent(child);
                 }
                 self.set_node_flag(child, NodeFlag::NeedsLayoutUpdate, true);
                 self.reset_cached_intrinsic_sizes(child);

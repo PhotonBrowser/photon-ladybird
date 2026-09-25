@@ -1161,11 +1161,11 @@ impl<'pass> TableFormattingContext<'pass> {
     }
 
     #[track_caller]
-    fn used_values(&self, node: Node) -> std::rc::Rc<UsedValues> {
+    fn used_values(&self, node: Node) -> &'pass UsedValues {
         self.records.used_values(node)
     }
 
-    fn create_used_values(&self, node: Node, constraints: ContainingBlockConstraints) -> std::rc::Rc<UsedValues> {
+    fn create_used_values(&self, node: Node, constraints: ContainingBlockConstraints) -> &'pass UsedValues {
         self.records.create_used_values(&self.callbacks, node, constraints)
     }
 
@@ -2614,7 +2614,7 @@ impl<'pass> TableFormattingContext<'pass> {
             // column can be narrower than those. The cell still occupies exactly its columns, with an empty content
             // box, as in other engines: shrink its used padding and borders to fit, so that the box painted for the
             // cell stays within its columns.
-            Self::shrink_cell_offsets_to_fit(&used, collapsed, cell_inline_size);
+            Self::shrink_cell_offsets_to_fit(used, collapsed, cell_inline_size);
             used.set_content_inline_size(
                 cell_inline_size - used.border_box_left(collapsed) - used.border_box_right(collapsed),
             );
@@ -2631,7 +2631,7 @@ impl<'pass> TableFormattingContext<'pass> {
             if defer_inside_layout {
                 // This cell's final inside layout happens once row heights are final; measure its
                 // content in a throwaway state instead of laying out the committing state twice.
-                if let Some(measured) = self.measure_cell(cell, &used, inner, true) {
+                if let Some(measured) = self.measure_cell(cell, used, inner, true) {
                     self.cell_measurements[cell_index] = Some(measured);
                     used.set_content_block_size(measured.automatic_content_block_size);
                     content_baselines = Some(measured.baselines);
@@ -2759,7 +2759,7 @@ impl<'pass> TableFormattingContext<'pass> {
             // The first pass measured this cell at its automatic block size; measure it again at
             // the percentage-resolved size to preserve the baseline its final inside layout will use.
             let content_baselines = self
-                .measure_cell(cell, &used, inner, false)
+                .measure_cell(cell, used, inner, false)
                 .map(|measured| measured.baselines);
             let baseline = self.cell_baseline(cell.box_, content_baselines);
             self.cells[cell_index].baseline = baseline;
@@ -2967,7 +2967,7 @@ impl<'pass> TableFormattingContext<'pass> {
                 used.padding_top.set(used.padding_top.get() + intrinsic_block_padding.0);
                 used.padding_bottom
                     .set(used.padding_bottom.get() + intrinsic_block_padding.1);
-                formatting_context::store_derived_baselines(&used, measurement.baselines);
+                formatting_context::store_derived_baselines(used, measurement.baselines);
                 formatting_context::propagate_percentage_block_size_dependency_to_containing_block(
                     run.records,
                     &run.callbacks,
@@ -3161,21 +3161,21 @@ impl<'pass> TableFormattingContext<'pass> {
             let group_start = column_index;
             if self.node_facts(child).is_table_column() {
                 let end = (column_index + self.table_column_span(child)).min(column_count);
-                placements.push((child, column_index, end));
+                placements.push((child, None, column_index, end));
                 column_index = end;
             } else {
                 let columns = self.matching_children(child, |facts| facts.is_table_column());
                 let mut column_placements = Vec::with_capacity(columns.len());
                 for column in columns {
                     let end = (column_index + self.table_column_span(column)).min(column_count);
-                    column_placements.push((column, column_index, end));
+                    column_placements.push((column, Some(child), column_index, end));
                     column_index = end;
                 }
-                placements.push((child, group_start, column_index));
+                placements.push((child, None, group_start, column_index));
                 placements.extend(column_placements);
             }
         }
-        for (node, start, end) in placements {
+        for (node, group, start, end) in placements {
             let inline_size = if (start..end).any(|index| !self.columns[index].is_collapsed) {
                 column_offsets[end] - column_offsets[start] - inline_spacing
             } else {
@@ -3188,9 +3188,10 @@ impl<'pass> TableFormattingContext<'pass> {
             used.set_content_block_size(block_size);
             let mut x = inline_offset + column_offsets[start];
             let mut y = block_start;
-            let containing_block = self.callbacks.containing_block(node);
-            if self.node_facts(containing_block).is_table_column_group() {
-                let group_offset = self.used_values(containing_block).content_offset.get();
+            if let Some(group) = group
+                && self.callbacks.in_flow_containing_block(node) == group
+            {
+                let group_offset = self.used_values(group).content_offset.get();
                 x -= group_offset.x;
                 y -= group_offset.y;
             }
@@ -3235,7 +3236,7 @@ impl<'pass> TableFormattingContext<'pass> {
         for row_index in 0..self.rows.len() {
             let baseline = Some(self.row_baseline(row_index));
             formatting_context::store_derived_baselines(
-                &self.used_values(self.rows[row_index].box_),
+                self.used_values(self.rows[row_index].box_),
                 DerivedBaselines {
                     first: baseline,
                     last: baseline,
@@ -3254,7 +3255,7 @@ impl<'pass> TableFormattingContext<'pass> {
                 .collect::<Vec<_>>();
             let used = self.used_values(group);
             formatting_context::store_derived_baselines(
-                &used,
+                used,
                 baselines_of_rows(&rows_in_group, used.content_offset.get().y),
             );
         }
