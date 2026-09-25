@@ -19,6 +19,7 @@ class QEvent;
 namespace Photon {
 
 class BrowserView;
+class WindowEffects;
 class WindowScene;
 
 class Window final : public QWidget {
@@ -40,8 +41,10 @@ protected:
 private:
     void dispatch_command(PhotonCommand const&);
     void install_web_shortcuts();
+    void update_blur_regions();
     void update_window_shape();
     std::unique_ptr<BrowserView> m_browser;
+    std::unique_ptr<WindowEffects> m_window_effects;
     WindowScene* m_scene { nullptr };
 #ifdef Q_OS_LINUX
     std::array<QWidget*, 4> m_window_corners { };

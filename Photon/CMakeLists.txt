@@ -45,6 +45,7 @@ qt_add_executable(photon
     Bridge/PhotonCommandTransport.cpp
     Bridge/PhotonApplication.cpp
     Bridge/PhotonWindow.cpp
+    Bridge/WindowEffects.cpp
     Bridge/WindowScene.cpp
     ${LADYBIRD_SOURCE_DIR}/UI/Qt/EventLoopImplementationQt.cpp
     ${LADYBIRD_SOURCE_DIR}/UI/Qt/EventLoopImplementationQtEventTarget.cpp
@@ -89,8 +90,40 @@ target_link_libraries(photon PRIVATE
 )
 
 if (LINUX AND NOT ANDROID)
+    set(QT_NO_PRIVATE_MODULE_WARNING ON)
+    find_package(Qt6 6.9 REQUIRED COMPONENTS GuiPrivate)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(GIO REQUIRED IMPORTED_TARGET gio-2.0 gio-unix-2.0)
+    pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client)
+    find_program(PHOTON_WAYLAND_SCANNER wayland-scanner REQUIRED)
+
+    set(PHOTON_BACKGROUND_EFFECT_XML "${CMAKE_CURRENT_SOURCE_DIR}/Bridge/Platform/Protocols/ext-background-effect-v1.xml")
+    set(PHOTON_BACKGROUND_EFFECT_HEADER "${CMAKE_CURRENT_BINARY_DIR}/ext-background-effect-v1-client-protocol.h")
+    set(PHOTON_BACKGROUND_EFFECT_CODE "${CMAKE_CURRENT_BINARY_DIR}/ext-background-effect-v1-protocol.c")
+    add_custom_command(
+        OUTPUT "${PHOTON_BACKGROUND_EFFECT_HEADER}"
+        COMMAND "${PHOTON_WAYLAND_SCANNER}" client-header "${PHOTON_BACKGROUND_EFFECT_XML}" "${PHOTON_BACKGROUND_EFFECT_HEADER}"
+        DEPENDS "${PHOTON_BACKGROUND_EFFECT_XML}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${PHOTON_BACKGROUND_EFFECT_CODE}"
+        COMMAND "${PHOTON_WAYLAND_SCANNER}" private-code "${PHOTON_BACKGROUND_EFFECT_XML}" "${PHOTON_BACKGROUND_EFFECT_CODE}"
+        DEPENDS "${PHOTON_BACKGROUND_EFFECT_XML}" "${PHOTON_BACKGROUND_EFFECT_HEADER}"
+        VERBATIM
+    )
+    # The upstream C source inherits C++-only project flags (for example
+    # -Wno-dangling-reference) from the shared C/C++ warning policy.
+    set_source_files_properties("${PHOTON_BACKGROUND_EFFECT_CODE}" PROPERTIES COMPILE_OPTIONS "-Wno-error")
+    target_sources(photon PRIVATE
+        Bridge/Platform/LinuxWindowEffects.cpp
+        "${PHOTON_BACKGROUND_EFFECT_HEADER}"
+        "${PHOTON_BACKGROUND_EFFECT_CODE}"
+    )
+    target_include_directories(photon PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+    target_link_libraries(photon PRIVATE Qt::GuiPrivate PkgConfig::WAYLAND_CLIENT)
+else()
+    target_sources(photon PRIVATE Bridge/Platform/UnsupportedWindowEffects.cpp)
 endif()
 
 if (NOT APPLE AND USE_VULKAN_DMABUF_IMAGES AND Qt6_VERSION VERSION_GREATER_EQUAL 6.7.0)

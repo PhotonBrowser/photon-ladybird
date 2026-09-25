@@ -8,6 +8,7 @@
 #include <Photon/Bridge/ChromeSurface.h>
 #include <Photon/Bridge/PhotonApplication.h>
 #include <Photon/Bridge/PhotonWindow.h>
+#include <Photon/Bridge/WindowEffects.h>
 #include <Photon/Bridge/WindowScene.h>
 
 #include <UI/Qt/WebContentView.h>
@@ -200,8 +201,16 @@ bool Window::initialize()
 #endif
 #ifdef Q_OS_LINUX
     setAttribute(Qt::WA_TranslucentBackground);
+    setAutoFillBackground(false);
 #endif
     m_scene = new WindowScene(*m_browser, *this);
+#ifdef Q_OS_LINUX
+    // Keep compositor blur across the full Photon window, including chrome
+    // and internal pages. Ordinary webpage pixels remain opaque.
+    winId();
+    m_window_effects = std::make_unique<WindowEffects>(*windowHandle());
+    update_blur_regions();
+#endif
 #ifdef Q_OS_LINUX
     constexpr std::array positions {
         WindowCornerPosition::TopLeft,
@@ -321,7 +330,17 @@ void Window::resizeEvent(QResizeEvent* event)
     QWidget::resizeEvent(event);
     if (m_scene)
         m_scene->setGeometry(rect());
+    update_blur_regions();
     update_window_shape();
+}
+
+void Window::update_blur_regions()
+{
+#ifdef Q_OS_LINUX
+    if (!m_window_effects)
+        return;
+    m_window_effects->set_blur_regions({ rect() });
+#endif
 }
 
 void Window::changeEvent(QEvent* event)

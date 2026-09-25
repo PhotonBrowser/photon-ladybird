@@ -35,6 +35,8 @@ WindowScene::WindowScene(BrowserView& browser, QWidget& parent)
 {
     m_chrome_cursor = m_chrome->view().cursor();
     setAttribute(Qt::WA_TranslucentBackground);
+    setAttribute(Qt::WA_NoSystemBackground);
+    setAutoFillBackground(false);
     update_background_color();
     parent.installEventFilter(this);
     m_active_page_view = &m_browser.widget();
@@ -162,7 +164,16 @@ void WindowScene::resizeEvent(QResizeEvent* event)
 void WindowScene::paintEvent(QPaintEvent*)
 {
     QPainter painter(this);
-    painter.fillRect(rect(), palette().color(QPalette::Window));
+    // QWidget backing stores can retain the parent palette under transparent
+    // WebContent pixels. Clear the backing store itself so the native surface
+    // alpha reaches the Wayland compositor.
+    painter.setCompositionMode(QPainter::CompositionMode_Source);
+    painter.fillRect(rect(), Qt::transparent);
+    painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+    // Ordinary webpages keep their normal opaque canvas fallback. Photon
+    // internal pages can expose the compositor effect across the full window.
+    if (!m_browser.is_internal_page())
+        painter.fillRect(page_view_rect(), palette().color(QPalette::Window));
 }
 
 QRect WindowScene::page_rect() const
