@@ -37,7 +37,7 @@ private:
     virtual Optional<WebView::ViewImplementation&> active_web_view() const override;
     virtual Vector<WebView::ViewImplementation&> active_window_web_views() const override;
     virtual bool should_coordinate_browser_process() const override { return false; }
-    virtual bool should_use_temporary_profile_by_default() const override { return true; }
+    virtual bool should_use_temporary_profile_by_default() const override { return false; }
 
     std::unique_ptr<QApplication> m_qt_application;
     Ladybird::WebContentView* m_active_view { nullptr };

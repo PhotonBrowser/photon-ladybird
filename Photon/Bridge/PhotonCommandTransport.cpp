@@ -58,6 +58,8 @@ std::optional<PhotonCommand> PhotonCommandTransport::decode_message(QString cons
         return ReloadCommand { };
     if (type == QStringLiteral("focus-address") && empty_payload())
         return FocusAddressCommand { };
+    if (type == QStringLiteral("ui-ready") && empty_payload())
+        return UiReadyCommand { };
     if (type == QStringLiteral("new-tab") && empty_payload())
         return NewTabCommand { };
     if (type == QStringLiteral("open-settings") && empty_payload())
@@ -70,9 +72,6 @@ std::optional<PhotonCommand> PhotonCommandTransport::decode_message(QString cons
         return WindowControlCommand { WindowCommand::ToggleMaximize };
     if (type == QStringLiteral("window-close") && empty_payload())
         return WindowControlCommand { WindowCommand::Close };
-    if (type == QStringLiteral("window-start-system-move") && empty_payload())
-        return WindowControlCommand { WindowCommand::StartSystemMove };
-
     if (type == QStringLiteral("navigate") && has_exact_fields({ u"url" })) {
         auto const value = object.value(QStringLiteral("url"));
         if (value.isString() && !value.toString().trimmed().isEmpty() && value.toString().size() <= 8192)
@@ -131,6 +130,13 @@ std::optional<PhotonCommand> PhotonCommandTransport::decode_message(QString cons
         if (opacity < 0 || opacity > 100 || opacity != std::floor(opacity))
             return { };
         return SetWindowTintOpacityCommand { static_cast<uint8_t>(opacity) };
+    }
+
+    if (type == QStringLiteral("set-titlebar-drag-region") && has_exact_fields({ u"enabled" })) {
+        auto const enabled = object.value(QStringLiteral("enabled"));
+        if (enabled.isBool())
+            return SetTitlebarDragRegionCommand { enabled.toBool() };
+        return { };
     }
 
     if (type == QStringLiteral("capture") && has_exact_fields({ u"region", u"open" })) {

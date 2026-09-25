@@ -25,6 +25,7 @@
 #include <QResizeEvent>
 #include <QStyleHints>
 #include <QWheelEvent>
+#include <QWindow>
 
 namespace Photon {
 
@@ -39,12 +40,14 @@ WindowScene::WindowScene(BrowserView& browser, QWidget& parent)
     setAutoFillBackground(false);
     update_background_color();
     parent.installEventFilter(this);
-    m_active_page_view = &m_browser.widget();
+    m_active_page_view = m_browser.widget();
     m_chrome->view().set_preferred_color_scheme(m_browser.preferred_color_scheme());
-    m_active_page_view->setParent(this);
-    m_active_page_view->installEventFilter(this);
-    update_page_geometry();
-    m_active_page_view->setVisible(!m_browser.is_internal_page());
+    if (m_active_page_view) {
+        m_active_page_view->setParent(this);
+        m_active_page_view->installEventFilter(this);
+        update_page_geometry();
+        m_active_page_view->setVisible(m_chrome_ready && !m_browser.is_internal_page());
+    }
     m_chrome->view().setParent(this);
     auto chrome_cursor_changed = std::move(m_chrome->view().on_cursor_change);
     m_chrome->view().on_cursor_change = [this, chrome_cursor_changed = std::move(chrome_cursor_changed)](Gfx::Cursor const& cursor) {
@@ -58,15 +61,19 @@ WindowScene::WindowScene(BrowserView& browser, QWidget& parent)
     });
     QObject::connect(&m_browser, &BrowserView::active_tab_changed, this, [this] {
         m_chrome->clear_page_tooltip();
-        m_active_page_view->hide();
-        m_active_page_view->removeEventFilter(this);
-        m_active_page_view->setParent(parentWidget());
-        m_active_page_view = &m_browser.widget();
-        m_active_page_view->setParent(this);
-        m_active_page_view->installEventFilter(this);
-        update_page_geometry();
-        m_active_page_view->setVisible(!m_browser.is_internal_page());
-        m_active_page_view->lower();
+        if (m_active_page_view) {
+            m_active_page_view->hide();
+            m_active_page_view->removeEventFilter(this);
+            m_active_page_view->setParent(parentWidget());
+        }
+        m_active_page_view = m_browser.widget();
+        if (m_active_page_view) {
+            m_active_page_view->setParent(this);
+            m_active_page_view->installEventFilter(this);
+            update_page_geometry();
+            m_active_page_view->setVisible(m_chrome_ready && !m_browser.is_internal_page());
+            m_active_page_view->lower();
+        }
         m_chrome->view().raise();
         m_pointer_over_page = false;
         auto& application = static_cast<Application&>(WebView::Application::the());
@@ -75,13 +82,16 @@ WindowScene::WindowScene(BrowserView& browser, QWidget& parent)
             application.set_active_view(m_chrome->view());
         } else if (m_chrome->view().hasFocus()) {
             application.set_active_view(m_chrome->view());
-        } else {
+        } else if (m_active_page_view) {
             application.set_active_view(*m_active_page_view);
+        } else {
+            application.set_active_view(m_chrome->view());
         }
         update_page_cursor();
     });
     QObject::connect(&m_browser, &BrowserView::browser_state_changed, this, [this] {
-        m_active_page_view->setVisible(!m_browser.is_internal_page());
+        if (m_active_page_view)
+            m_active_page_view->setVisible(m_chrome_ready && !m_browser.is_internal_page());
         m_chrome->view().set_preferred_color_scheme(m_browser.preferred_color_scheme());
         update_background_color();
         m_chrome->update_state(m_browser);
@@ -91,6 +101,9 @@ WindowScene::WindowScene(BrowserView& browser, QWidget& parent)
     });
     QObject::connect(&m_browser, &BrowserView::page_tooltip_cleared, this, [this] {
         m_chrome->clear_page_tooltip();
+    });
+    QObject::connect(&m_browser, &BrowserView::page_crashed, this, [this] {
+        m_chrome->notify_page_crash();
     });
     QObject::connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, [this](Qt::ColorScheme) {
         m_browser.refresh_preferred_color_scheme();
@@ -123,6 +136,15 @@ void WindowScene::load_chrome()
     application.set_active_view(m_chrome->view());
 }
 
+void WindowScene::set_chrome_ready()
+{
+    if (m_chrome_ready)
+        return;
+    m_chrome_ready = true;
+    if (m_active_page_view)
+        m_active_page_view->setVisible(!m_browser.is_internal_page());
+}
+
 void WindowScene::focus_address_bar()
 {
     m_chrome->view().setFocus(Qt::ShortcutFocusReason);
@@ -141,7 +163,7 @@ void WindowScene::set_overlay_open(bool open)
     m_chrome->view().setFocus(Qt::OtherFocusReason);
     auto& application = static_cast<Application&>(WebView::Application::the());
     application.set_active_view(m_chrome->view());
-    if (m_pointer_over_page) {
+    if (m_pointer_over_page && m_active_page_view) {
         QEvent leave(QEvent::Leave);
         QCoreApplication::sendEvent(m_active_page_view, &leave);
         m_pointer_over_page = false;
@@ -204,12 +226,13 @@ void WindowScene::update_background_color()
 
 void WindowScene::update_page_geometry()
 {
-    m_active_page_view->setGeometry(page_view_rect());
+    if (m_active_page_view)
+        m_active_page_view->setGeometry(page_view_rect());
 }
 
 bool WindowScene::page_contains(QPoint point) const
 {
-    if (!page_rect().contains(point))
+    if (!m_active_page_view || !page_rect().contains(point))
         return false;
 
     QPainterPath page;
@@ -236,8 +259,8 @@ bool WindowScene::has_open_overlays() const
 
 void WindowScene::update_page_cursor()
 {
-    if (m_pointer_over_page)
-        m_chrome->view().setCursor(m_browser.widget().cursor());
+    if (m_pointer_over_page && m_active_page_view)
+        m_chrome->view().setCursor(m_active_page_view->cursor());
     else
         m_chrome->view().setCursor(m_chrome_cursor);
 }
@@ -314,13 +337,16 @@ void WindowScene::forward_overlay_event_to_chrome(QEvent* event)
 bool WindowScene::eventFilter(QObject* watched, QEvent* event)
 {
     if (watched == parentWidget() && event->type() == QEvent::WindowActivate) {
-        if (m_browser.is_internal_page() || (!m_active_page_view->hasFocus() && !m_chrome->view().hasFocus()))
+        if (m_browser.is_internal_page() || !m_active_page_view
+            || (!m_active_page_view->hasFocus() && !m_chrome->view().hasFocus()))
             m_chrome->view().setFocus(Qt::OtherFocusReason);
         auto& application = static_cast<Application&>(WebView::Application::the());
         if (m_chrome->view().hasFocus() || m_browser.is_internal_page())
             application.set_active_view(m_chrome->view());
-        else
+        else if (m_active_page_view)
             application.set_active_view(*m_active_page_view);
+        else
+            application.set_active_view(m_chrome->view());
     }
 
     if (event->type() == QEvent::FocusIn) {
@@ -354,9 +380,11 @@ bool WindowScene::eventFilter(QObject* watched, QEvent* event)
             return true;
 
         if (is_titlebar_double_click) {
-            auto& chrome = m_chrome->view();
-            QMouseEvent forwarded(QEvent::MouseButtonDblClick, chrome.mapFrom(this, scene_position), mouse->globalPosition(), Qt::LeftButton, mouse->buttons(), mouse->modifiers());
-            QCoreApplication::sendEvent(&chrome, &forwarded);
+            auto* top_level = window();
+            if (top_level->isMaximized())
+                top_level->showNormal();
+            else
+                top_level->showMaximized();
             event->accept();
             return true;
         }
@@ -384,6 +412,25 @@ bool WindowScene::eventFilter(QObject* watched, QEvent* event)
         auto point = mouse->position().toPoint();
         m_pointer_over_page = !chrome_owns_point(point);
         update_page_cursor();
+
+        auto is_titlebar_drag_region = m_titlebar_drag_region
+            && point.y() >= 0 && point.y() < titlebar_height;
+        if (is_titlebar_drag_region && event->type() == QEvent::MouseButtonDblClick && mouse->button() == Qt::LeftButton) {
+            auto* top_level = window();
+            if (top_level->isMaximized())
+                top_level->showNormal();
+            else
+                top_level->showMaximized();
+            event->accept();
+            return true;
+        }
+        if (is_titlebar_drag_region && event->type() == QEvent::MouseButtonPress && mouse->button() == Qt::LeftButton) {
+            if (auto* window_handle = window()->windowHandle(); window_handle && window_handle->startSystemMove()) {
+                event->accept();
+                return true;
+            }
+        }
+
         if (m_pointer_over_page) {
             if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonDblClick) {
                 m_chrome->blur_address_bar();

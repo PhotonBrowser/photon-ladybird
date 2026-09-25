@@ -263,7 +263,10 @@ void Window::dispatch_command(PhotonCommand const& command)
         using Command = std::decay_t<decltype(typed_command)>;
         if constexpr (std::is_same_v<Command, NavigateCommand>)
             m_browser->navigate(typed_command.url);
-        else if constexpr (std::is_same_v<Command, BackCommand>)
+        else if constexpr (std::is_same_v<Command, UiReadyCommand>) {
+            m_scene->set_chrome_ready();
+            m_scene->chrome().update_state(*m_browser);
+        } else if constexpr (std::is_same_v<Command, BackCommand>)
             m_browser->go_back();
         else if constexpr (std::is_same_v<Command, ForwardCommand>)
             m_browser->go_forward();
@@ -290,6 +293,8 @@ void Window::dispatch_command(PhotonCommand const& command)
             m_browser->set_dim_overlays(typed_command.enabled);
         else if constexpr (std::is_same_v<Command, SetWindowTintOpacityCommand>)
             m_browser->set_window_tint_opacity(typed_command.opacity);
+        else if constexpr (std::is_same_v<Command, SetTitlebarDragRegionCommand>)
+            m_scene->set_titlebar_drag_region(typed_command.enabled);
         else if constexpr (std::is_same_v<Command, SetOverlayCaptureCommand>)
             m_scene->set_overlay_open(typed_command.open);
         else if constexpr (std::is_same_v<Command, WindowControlCommand>) {
@@ -305,10 +310,6 @@ void Window::dispatch_command(PhotonCommand const& command)
                 break;
             case WindowCommand::Close:
                 QTimer::singleShot(0, this, [this] { close(); });
-                break;
-            case WindowCommand::StartSystemMove:
-                if (windowHandle())
-                    windowHandle()->startSystemMove();
                 break;
             }
         } else

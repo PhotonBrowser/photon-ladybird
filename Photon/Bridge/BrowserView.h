@@ -44,7 +44,7 @@ public:
     bool loading() const;
     bool can_go_back() const;
     bool can_go_forward() const;
-    Ladybird::WebContentView& widget() const;
+    Ladybird::WebContentView* widget() const;
     uint64_t active_tab_id() const;
     QString tabs_json() const;
     bool is_internal_page() const;
@@ -69,6 +69,7 @@ public:
     void set_dim_overlays(bool enabled);
     void set_window_tint_opacity(uint8_t opacity);
     void load_initial_url();
+    void prepare_initial_page();
 
 signals:
     void url_changed();
@@ -78,6 +79,7 @@ signals:
     void cursor_changed();
     void page_tooltip_changed(QString text, QPoint position);
     void page_tooltip_cleared();
+    void page_crashed();
     void browser_state_changed();
     void active_tab_changed();
 

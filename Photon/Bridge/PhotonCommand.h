@@ -21,6 +21,7 @@ struct BackCommand { };
 struct ForwardCommand { };
 struct ReloadCommand { };
 struct FocusAddressCommand { };
+struct UiReadyCommand { };
 struct NewTabCommand { };
 struct OpenSettingsCommand { };
 struct SelectTabCommand {
@@ -51,6 +52,9 @@ struct SetDimOverlaysCommand {
 struct SetWindowTintOpacityCommand {
     uint8_t opacity;
 };
+struct SetTitlebarDragRegionCommand {
+    bool enabled;
+};
 
 enum class OverlayRegion {
     BrowserMenu,
@@ -67,7 +71,6 @@ enum class WindowCommand {
     Maximize,
     ToggleMaximize,
     Close,
-    StartSystemMove,
 };
 
 struct WindowControlCommand {
@@ -80,6 +83,7 @@ using PhotonCommand = std::variant<
     ForwardCommand,
     ReloadCommand,
     FocusAddressCommand,
+    UiReadyCommand,
     NewTabCommand,
     OpenSettingsCommand,
     SelectTabCommand,
@@ -89,6 +93,7 @@ using PhotonCommand = std::variant<
     SetForceDarkPagesCommand,
     SetDimOverlaysCommand,
     SetWindowTintOpacityCommand,
+    SetTitlebarDragRegionCommand,
     SetOverlayCaptureCommand,
     WindowControlCommand>;
 

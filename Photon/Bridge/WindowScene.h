@@ -30,6 +30,8 @@ public:
 
     ChromeSurface& chrome() { return *m_chrome; }
     void load_chrome();
+    void set_chrome_ready();
+    void set_titlebar_drag_region(bool enabled) { m_titlebar_drag_region = enabled; }
     void focus_address_bar();
     void set_overlay_open(bool open);
     void clear_open_overlays();
@@ -41,6 +43,7 @@ protected:
 
 private:
     static constexpr int chrome_toolbar_height = 72;
+    static constexpr int titlebar_height = 36;
     static constexpr int page_inset = 4;
     static constexpr int page_corner_radius = 6;
 
@@ -61,6 +64,8 @@ private:
     QCursor m_chrome_cursor;
     Ladybird::WebContentView* m_active_page_view { nullptr };
     bool m_overlay_open { false };
+    bool m_chrome_ready { false };
+    bool m_titlebar_drag_region { false };
 };
 
 }

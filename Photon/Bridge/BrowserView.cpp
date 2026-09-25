@@ -78,7 +78,7 @@ private:
 BrowserView::BrowserView(QWidget& host)
     : QObject(&host)
     , m_host(host)
-    , m_state([&host] {
+    , m_state([] {
         auto config_path = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
         config_path += QStringLiteral("/config.toml");
         auto utf8_path = config_path.toUtf8();
@@ -87,7 +87,6 @@ BrowserView::BrowserView(QWidget& host)
             static_cast<size_t>(utf8_path.size()));
     }())
 {
-    create_view(active_tab_id());
 }
 
 BrowserView::~BrowserView()
@@ -124,11 +123,9 @@ bool BrowserView::can_go_forward() const
     return photon_browser_can_go_forward(m_state) != 0;
 }
 
-Ladybird::WebContentView& BrowserView::widget() const
+Ladybird::WebContentView* BrowserView::widget() const
 {
-    auto* view = m_views.value(active_tab_id());
-    VERIFY(view);
-    return *view;
+    return m_views.value(active_tab_id());
 }
 
 uint64_t BrowserView::active_tab_id() const
@@ -180,6 +177,16 @@ Ladybird::WebContentView& BrowserView::create_view(uint64_t tab_id)
     // A cross-site navigation can replace the hosting WebContent process.
     view->on_load_finish = [this, view](URL::URL const&) {
         apply_page_appearance(*view);
+    };
+    // Photon restores the tab immediately after Ladybird respawns its renderer.
+    // The full-page engine overlay would otherwise cover the trusted chrome.
+    view->on_crash_overlay_state_change = [](bool) { };
+    view->on_web_content_crashed = [this, view, tab_id](auto) {
+        if (m_views.value(tab_id) != view)
+            return;
+        if (tab_id == active_tab_id())
+            emit page_crashed();
+        view->reload();
     };
     view->on_url_change = [this, tab_id](URL::URL const& url) {
         update_url(tab_id, qstring_from_ak_string(url.serialize()));
@@ -249,6 +256,10 @@ bool BrowserView::navigate(QString const& input)
 
 void BrowserView::reload()
 {
+    if (auto* active_view = widget(); active_view && active_view->is_loading()) {
+        active_view->stop_loading();
+        return;
+    }
     apply_app_effects(dispatch_app_command(m_state, PhotonAppCommandKind_Reload));
 }
 
@@ -264,8 +275,8 @@ void BrowserView::go_forward()
 
 void BrowserView::focus_web_content()
 {
-    if (!is_internal_page())
-        widget().setFocus(Qt::ShortcutFocusReason);
+    if (auto* active_view = widget())
+        active_view->setFocus(Qt::ShortcutFocusReason);
 }
 
 uint64_t BrowserView::create_tab()
@@ -342,16 +353,24 @@ void BrowserView::apply_app_effects(PhotonAppEffects const& effects)
         return;
     if (effects.requested_close_tab_id != 0) {
         // Rust validated the tab and decided a native close request is required.
-        if (auto* view = m_views.value(effects.requested_close_tab_id))
+        if (auto* view = m_views.value(effects.requested_close_tab_id)) {
             view->request_close();
+        } else {
+            // Photon internal tabs do not own page views, so close them directly.
+            apply_app_effects(dispatch_app_command(m_state, PhotonAppCommandKind_PageClosed, effects.requested_close_tab_id));
+            return;
+        }
     }
     switch (effects.navigation_kind) {
     case 0:
         break;
     case 1: {
         auto* view = m_views.value(effects.navigation_tab_id);
-        if (!view)
-            break;
+        auto did_create_view = !view;
+        if (did_create_view)
+            view = &create_view(effects.navigation_tab_id);
+        if (did_create_view)
+            emit active_tab_changed();
         auto parsed_url = ak_url_from_qstring(qstring_from_photon_utf8(effects.navigation_target));
         if (!parsed_url.has_value())
             break;
@@ -374,8 +393,6 @@ void BrowserView::apply_app_effects(PhotonAppEffects const& effects)
     default:
         VERIFY_NOT_REACHED();
     }
-    if (effects.created_tab_id != 0)
-        create_view(effects.created_tab_id);
     Ladybird::WebContentView* removed_view = nullptr;
     if (effects.removed_tab_id != 0) {
         removed_view = m_views.take(effects.removed_tab_id);
@@ -405,6 +422,15 @@ void BrowserView::load_initial_url()
         return;
     if (!navigate(url()))
         warnln("Photon: Rust core supplied an invalid initial URL");
+}
+
+void BrowserView::prepare_initial_page()
+{
+    if (is_internal_page())
+        return;
+    auto tab_id = active_tab_id();
+    if (!m_views.contains(tab_id))
+        create_view(tab_id);
 }
 
 void BrowserView::update_url(uint64_t tab_id, QString const& url)

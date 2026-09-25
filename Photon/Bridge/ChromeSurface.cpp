@@ -33,8 +33,17 @@ ChromeSurface::ChromeSurface(QWidget& parent)
     , m_view(new Ladybird::WebContentView(&parent))
 {
     m_view->set_transparent_background(true);
+    m_view->on_crash_overlay_state_change = [](bool) { };
+    m_view->on_web_content_crashed = [this](auto) {
+        m_crash_recovery_pending = true;
+        if (m_browser)
+            load(*m_browser);
+    };
     m_view->on_navigation_request = [this](URL::URL const& url) {
         return handle_navigation_request(url);
+    };
+    m_view->on_load_start = [this] {
+        m_ui_ready = false;
     };
 }
 
@@ -46,6 +55,8 @@ ChromeSurface::~ChromeSurface()
 
 void ChromeSurface::load(BrowserView const& browser)
 {
+    m_browser = &browser;
+    m_ui_ready = false;
     auto initial_state = browser.tabs_json().toUtf8();
 
     auto dev_server = qgetenv("PHOTON_WEBUI_DEV_SERVER");
@@ -96,24 +107,33 @@ void ChromeSurface::load(BrowserView const& browser)
         if (!parsed_url.has_value())
             return;
         dev_server_url = parsed_url.release_value();
+        m_dev_server_document_url = *dev_server_url;
     }
 
     auto on_message = [this](WebView::TrustedEmbedderMessage message) {
-        if (!m_trusted_document_loaded || !on_command)
+        if (!on_command)
             return;
         auto payload = message.payload.serialized();
         auto payload_bytes = payload.bytes();
         auto command = m_command_transport.decode_message(qstring_from_ak_string(message.type),
             QByteArray(reinterpret_cast<char const*>(payload_bytes.data()), static_cast<qsizetype>(payload_bytes.size())));
-        if (command.has_value())
+        if (command.has_value()) {
+            auto notify_crash_recovery = false;
+            if (std::holds_alternative<UiReadyCommand>(*command)) {
+                m_ui_ready = true;
+                notify_crash_recovery = m_crash_recovery_pending;
+                m_crash_recovery_pending = false;
+            }
             on_command(*command);
+            if (notify_crash_recovery)
+                notify_chrome_crash();
+        }
     };
     auto channel_result = dev_server_url.has_value()
         ? m_view->enable_trusted_embedder_messaging_for_next_navigation(*dev_server_url, move(on_message))
         : m_view->enable_trusted_embedder_messaging(move(on_message));
     if (channel_result.is_error())
         dbgln("Unable to enable Photon trusted message channel: {}", channel_result.error());
-    m_trusted_document_loaded = !channel_result.is_error();
     if (!dev_server_url.has_value()) {
         m_trusted_load_html_navigation_pending = true;
         m_view->load_html({ html.constData(), static_cast<size_t>(html.size()) });
@@ -126,6 +146,8 @@ void ChromeSurface::load(BrowserView const& browser)
 
 void ChromeSurface::update_state(BrowserView const& browser)
 {
+    if (!m_ui_ready)
+        return;
     auto state_json = browser.tabs_json().toUtf8();
     auto parsed_state = AK::JsonValue::from_string({ state_json.constData(), static_cast<size_t>(state_json.size()) });
     if (parsed_state.is_error()) {
@@ -152,8 +174,20 @@ void ChromeSurface::clear_page_tooltip()
     m_view->run_javascript(ak_string_from_qstring(QStringLiteral("window.dispatchEvent(new Event('photon-page-tooltip-clear'));")));
 }
 
+void ChromeSurface::notify_page_crash()
+{
+    m_view->run_javascript(ak_string_from_qstring(QStringLiteral("window.dispatchEvent(new Event('photon-page-crashed'));")));
+}
+
+void ChromeSurface::notify_chrome_crash()
+{
+    m_view->run_javascript(ak_string_from_qstring(QStringLiteral("window.dispatchEvent(new Event('photon-chrome-crashed'));")));
+}
+
 void ChromeSurface::focus_address_bar()
 {
+    if (!m_ui_ready)
+        return;
     auto result = m_view->send_trusted_embedder_message({ "focus-address"_string, AK::JsonValue { } });
     if (result.is_error())
         dbgln("Unable to send focus-address event through trusted messaging: {}", result.error());
@@ -161,6 +195,8 @@ void ChromeSurface::focus_address_bar()
 
 void ChromeSurface::blur_address_bar()
 {
+    if (!m_ui_ready)
+        return;
     auto result = m_view->send_trusted_embedder_message({ "blur-address"_string, AK::JsonValue { } });
     if (result.is_error())
         dbgln("Unable to send blur-address event through trusted messaging: {}", result.error());
@@ -182,10 +218,7 @@ bool ChromeSurface::handle_navigation_request(URL::URL const& url)
     if (!parsed.isValid())
         return true;
 
-    if (!m_dev_server_origin.isEmpty()
-        && parsed.scheme() == m_dev_server_origin.scheme()
-        && parsed.host() == m_dev_server_origin.host()
-        && parsed.port() == m_dev_server_origin.port())
+    if (m_dev_server_document_url.has_value() && url == *m_dev_server_document_url)
         return false;
     return true;
 }
