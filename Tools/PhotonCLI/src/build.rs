@@ -16,13 +16,32 @@ use crate::output::BuildDisplay;
 use crate::process::{run_inherited, run_logged};
 use crate::ui;
 
-pub fn build(repository: &Path, preset: &str, verbose: bool, target: Option<&str>) -> Result<i32> {
+pub fn build(repository: &Path, preset: &str, verbose: bool, stats: bool, target: Option<&str>) -> Result<i32> {
+    let total_started = Instant::now();
     let source = crate::engine::ensure_build_tree(repository)?;
+    let ui_started = Instant::now();
     ensure_webui_production_build(repository, &source)?;
-    build_native(repository, &source, preset, verbose, target)
+    let stats = stats.then_some(BuildStatsRequest {
+        total_started,
+        ui_elapsed: ui_started.elapsed(),
+    });
+    build_native(repository, &source, preset, verbose, target, stats)
 }
 
-fn build_native(repository: &Path, source: &Path, preset: &str, verbose: bool, target: Option<&str>) -> Result<i32> {
+#[derive(Clone, Copy)]
+struct BuildStatsRequest {
+    total_started: Instant,
+    ui_elapsed: Duration,
+}
+
+fn build_native(
+    repository: &Path,
+    source: &Path,
+    preset: &str,
+    verbose: bool,
+    target: Option<&str>,
+    stats: Option<BuildStatsRequest>,
+) -> Result<i32> {
     ensure_configured_for_source(source, preset)?;
     let mut command = ladybird_command(source);
     command.args(["build", "--preset", preset]);
@@ -30,7 +49,7 @@ fn build_native(repository: &Path, source: &Path, preset: &str, verbose: bool, t
         command.arg(target);
     }
 
-    run_build_command(repository, command, preset, verbose, target)
+    run_build_command(repository, source, command, preset, verbose, target, stats)
 }
 
 /// Ladybird's build helper reuses an existing CMake generator without checking
@@ -77,7 +96,7 @@ pub fn run(
 ) -> Result<i32> {
     let source = crate::engine::ensure_build_tree(repository)?;
     if !no_build {
-        let code = build(repository, preset, verbose, Some("Photon"))?;
+        let code = build(repository, preset, verbose, false, Some("Photon"))?;
         if code != 0 {
             return Ok(code);
         }
@@ -105,7 +124,7 @@ pub fn run_dev(repository: &Path, no_build: bool, verbose: bool, application_arg
             bail!("Photon must be built for dev mode; run `./photon build` first or omit `--no-build`");
         }
         ui::step("Building Photon for dev mode...");
-        let code = build_native(repository, &source, "Release", verbose, Some("Photon"))?;
+        let code = build_native(repository, &source, "Release", verbose, Some("Photon"), None)?;
         if code != 0 {
             return Ok(code);
         }
@@ -178,7 +197,7 @@ pub fn run_dev(repository: &Path, no_build: bool, verbose: bool, application_arg
         let source = crate::engine::ensure_build_tree(repository)?;
         sources = dev_source_snapshot(repository, &source)?;
         ensure_webui_dependencies(repository)?;
-        let code = build_native(repository, &source, "Release", verbose, Some("Photon"))?;
+        let code = build_native(repository, &source, "Release", verbose, Some("Photon"), None)?;
         if code == 130 || crate::process::interrupt_requested() {
             return Ok(130);
         }
@@ -237,7 +256,8 @@ pub fn ensure_webui_production_build(repository: &Path, source: &Path) -> Result
         ui::step("Building Photon Web UI (Vite production bundle)...");
         let mut command = Command::new("npm");
         command.args(["run", "build"]).current_dir(&web_ui_directory);
-        let code = crate::process::run_inherited(&mut command).context("failed to run `npm run build` in Photon/WebUI")?;
+        let code =
+            crate::process::run_inherited(&mut command).context("failed to run `npm run build` in Photon/WebUI")?;
         if code != 0 {
             bail!("`npm run build` in Photon/WebUI failed with exit code {code}");
         }
@@ -528,10 +548,12 @@ pub fn test(repository: &Path, preset: &str, pattern: Option<&str>, verbose: boo
 
 fn run_build_command(
     repository: &Path,
+    source: &Path,
     mut command: Command,
     preset: &str,
     verbose: bool,
     target: Option<&str>,
+    stats: Option<BuildStatsRequest>,
 ) -> Result<i32> {
     command.env("NINJA_STATUS", "[PHOTON %f/%t] ");
     command.env_remove("CLAUDECODE");
@@ -541,11 +563,258 @@ fn run_build_command(
     let started = Instant::now();
     let display_log_path = log_path.strip_prefix(repository).unwrap_or(&log_path);
     let mut display = BuildDisplay::new("Building Photon", preset, verbose, display_log_path);
+    let build_directory = source.join("Build").join(preset_directory(preset));
+    let previous_ninja_log = stats
+        .map(|_| NinjaLogSnapshot::read(&build_directory.join(".ninja_log")))
+        .transpose()?;
+    let ccache_before = stats.and_then(|_| ccache_calls());
     let outcome = run_logged(&mut command, &log_path, verbose, |line| {
         display.observe(line);
     })?;
     display.finish(&outcome, started.elapsed(), target);
+    if let (Some(stats), Some(previous_ninja_log)) = (stats, previous_ninja_log.as_ref()) {
+        if let Err(error) = report_build_stats(&build_directory, stats, previous_ninja_log, ccache_before) {
+            eprintln!("Photon build stats unavailable: {error:#}");
+        }
+    }
     Ok(outcome.code)
+}
+
+#[derive(Default)]
+struct NinjaBuildStats {
+    compile_ms: u64,
+    link_ms: u64,
+    codegen_ms: u64,
+    other_ms: u64,
+    slowest_units: Vec<(u64, String)>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct CcacheCalls {
+    hits: u64,
+    misses: u64,
+}
+
+struct NinjaLogSnapshot {
+    contents: String,
+}
+
+impl NinjaLogSnapshot {
+    fn read(path: &Path) -> Result<Self> {
+        let contents = match fs::read_to_string(path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => return Err(error).with_context(|| format!("failed to read {}", path.display())),
+        };
+        Ok(Self { contents })
+    }
+}
+
+fn report_build_stats(
+    build_directory: &Path,
+    request: BuildStatsRequest,
+    previous_ninja_log: &NinjaLogSnapshot,
+    ccache_before: Option<CcacheCalls>,
+) -> Result<()> {
+    let build_elapsed = request.total_started.elapsed();
+    let mut ninja = Command::new("ninja");
+    ninja.arg("-C").arg(build_directory).args(["-t", "compdb"]);
+    let output = ninja.output().context("failed to run `ninja -t compdb`")?;
+    if !output.status.success() {
+        bail!(
+            "`ninja -t compdb` failed with exit code {}",
+            output.status.code().unwrap_or(-1)
+        );
+    }
+
+    let compile_commands = build_directory.join("compile_commands.json");
+    fs::write(&compile_commands, &output.stdout)
+        .with_context(|| format!("failed to write {}", compile_commands.display()))?;
+    let profile = profile_ninja_log(&build_directory.join(".ninja_log"), &output.stdout, previous_ninja_log)?;
+
+    println!("\nPhoton build: {:.1}s", build_elapsed.as_secs_f64());
+    println!("Slowest compilation units");
+    for (duration, unit) in &profile.slowest_units {
+        println!("  {:>5.1}s  {unit}", *duration as f64 / 1000.0);
+    }
+    if profile.slowest_units.is_empty() {
+        println!("  No compilation units ran");
+    }
+    println!(
+        "\nCompile       {:>5.1}s (summed unit time)",
+        profile.compile_ms as f64 / 1000.0
+    );
+    println!(
+        "Link          {:>5.1}s (summed operation time)",
+        profile.link_ms as f64 / 1000.0
+    );
+    println!(
+        "Codegen       {:>5.1}s (summed operation time)",
+        profile.codegen_ms as f64 / 1000.0
+    );
+    if profile.other_ms > 0 {
+        println!(
+            "Other         {:>5.1}s (summed operation time)",
+            profile.other_ms as f64 / 1000.0
+        );
+    }
+    println!("Photon UI     {:>5.1}s", request.ui_elapsed.as_secs_f64());
+    println!("Compile database: {}", compile_commands.display());
+
+    if let (Some(before), Some(after)) = (ccache_before, ccache_calls()) {
+        let hits = after.hits.saturating_sub(before.hits);
+        let misses = after.misses.saturating_sub(before.misses);
+        let calls = hits + misses;
+        if calls > 0 {
+            println!(
+                "ccache hit rate: {:.0}% ({hits}/{calls} calls)",
+                hits as f64 * 100.0 / calls as f64
+            );
+        }
+    }
+    Ok(())
+}
+
+fn profile_ninja_log(
+    log_path: &Path,
+    compile_commands: &[u8],
+    previous_log: &NinjaLogSnapshot,
+) -> Result<NinjaBuildStats> {
+    let command_list: serde_json::Value =
+        serde_json::from_slice(compile_commands).context("invalid Ninja compilation database")?;
+    let mut compile_units = HashMap::new();
+    if let Some(commands) = command_list.as_array() {
+        for command in commands {
+            let (Some(output), Some(file)) = (command["output"].as_str(), command["file"].as_str()) else {
+                continue;
+            };
+            if output.ends_with(".o") || output.ends_with(".obj") {
+                compile_units.insert(normalize_ninja_path(output), file.to_owned());
+            }
+        }
+    }
+
+    let log = match fs::read_to_string(log_path) {
+        Ok(log) => log,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(NinjaBuildStats::default()),
+        Err(error) => return Err(error).with_context(|| format!("failed to read {}", log_path.display())),
+    };
+    let new_log_entries = if log.starts_with(&previous_log.contents) {
+        &log[previous_log.contents.len()..]
+    } else {
+        // Ninja may compact the log; in that case select records absent from
+        // the pre-build snapshot instead of comparing per-process timestamps.
+        let previous_entries = previous_log.contents.lines().collect::<std::collections::HashSet<_>>();
+        let added_entries = log
+            .lines()
+            .filter(|line| !previous_entries.contains(line))
+            .collect::<Vec<_>>();
+        return profile_ninja_entries(&added_entries.join("\n"), &compile_units, log_path);
+    };
+
+    profile_ninja_entries(new_log_entries, &compile_units, log_path)
+}
+
+fn profile_ninja_entries(
+    entries: &str,
+    compile_units: &HashMap<String, String>,
+    log_path: &Path,
+) -> Result<NinjaBuildStats> {
+    let mut stats = NinjaBuildStats::default();
+    for line in entries.lines().filter(|line| !line.starts_with('#')) {
+        let mut fields = line.split('\t');
+        let (Some(start), Some(end), Some(_), Some(output)) =
+            (fields.next(), fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        let (Ok(start), Ok(end)) = (start.parse::<u64>(), end.parse::<u64>()) else {
+            continue;
+        };
+        if end < start {
+            continue;
+        }
+
+        let duration = end - start;
+        let output = normalize_ninja_path(output);
+        if let Some(unit) = compile_units.get(&output) {
+            stats.compile_ms += duration;
+            let source_root = log_path
+                .ancestors()
+                .nth(3)
+                .and_then(|path| path.canonicalize().ok())
+                .unwrap_or_else(|| log_path.ancestors().nth(3).unwrap_or(log_path).to_path_buf());
+            let unit = Path::new(unit)
+                .strip_prefix(&source_root)
+                .unwrap_or(Path::new(unit))
+                .to_string_lossy()
+                .into_owned();
+            stats.slowest_units.push((duration, unit));
+        } else if is_link_output(&output) {
+            stats.link_ms += duration;
+        } else if is_codegen_output(&output) {
+            stats.codegen_ms += duration;
+        } else {
+            stats.other_ms += duration;
+        }
+    }
+    stats.slowest_units.sort_by(|left, right| right.0.cmp(&left.0));
+    stats.slowest_units.truncate(5);
+    Ok(stats)
+}
+
+fn normalize_ninja_path(path: &str) -> String {
+    path.replace('\\', "/").trim_start_matches("./").to_owned()
+}
+
+fn is_link_output(output: &str) -> bool {
+    [".a", ".so", ".dylib", ".dll", ".exe"]
+        .iter()
+        .any(|extension| output.ends_with(extension))
+        || output.starts_with("bin/")
+        || output.contains("/bin/")
+}
+
+fn is_codegen_output(output: &str) -> bool {
+    let generated_path = output.to_ascii_lowercase();
+    ["generated/", "_generated", "/bindings/", "generate_"]
+        .iter()
+        .any(|marker| generated_path.contains(marker))
+}
+
+fn ccache_calls() -> Option<CcacheCalls> {
+    let output = Command::new("ccache").arg("--show-stats").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let report = String::from_utf8_lossy(&output.stdout);
+    let mut calls = CcacheCalls::default();
+    let (mut found_hits, mut found_misses) = (false, false);
+    for line in report.lines() {
+        let Some((label, value)) = line.trim().split_once(':') else {
+            continue;
+        };
+        let Some(count) = value
+            .trim()
+            .split_whitespace()
+            .next()
+            .and_then(|value| value.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        match label {
+            "Hits" if !found_hits => {
+                calls.hits = count;
+                found_hits = true;
+            }
+            "Misses" if !found_misses => {
+                calls.misses = count;
+                found_misses = true;
+            }
+            _ => {}
+        }
+    }
+    (found_hits && found_misses).then_some(calls)
 }
 
 fn ladybird_command(repository: &Path) -> Command {

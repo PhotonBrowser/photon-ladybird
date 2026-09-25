@@ -159,6 +159,9 @@ struct BuildArgs {
     /// Stream complete output instead of showing the status UI
     #[arg(long, short)]
     verbose: bool,
+    /// Report Ninja operation timings and the ccache hit rate after building
+    #[arg(long)]
+    stats: bool,
 }
 
 #[derive(Debug, Args)]
@@ -202,7 +205,13 @@ fn run() -> Result<i32> {
     let repository = repository_root()?;
 
     match cli.command {
-        Command::Build(args) => build::build(&repository, preset(args.debug), args.verbose, Some("Photon")),
+        Command::Build(args) => build::build(
+            &repository,
+            preset(args.debug),
+            args.verbose,
+            args.stats,
+            Some("Photon"),
+        ),
         Command::Run(args) => {
             let (dev_mode, forwarded_args) = split_dev_args(args.dev, &args.application_args);
             if dev_mode {
