@@ -18,7 +18,7 @@ use crate::ui;
 
 pub fn build(repository: &Path, preset: &str, verbose: bool, target: Option<&str>) -> Result<i32> {
     let source = crate::engine::ensure_build_tree(repository)?;
-    ensure_webui_production_build(repository)?;
+    ensure_webui_production_build(repository, &source)?;
     build_native(repository, &source, preset, verbose, target)
 }
 
@@ -84,7 +84,7 @@ pub fn run(
         ui::step("Starting Photon...");
     } else {
         ui::header("Photon", Some("Run · Release · Qt"));
-        if webui_bundle_is_stale(repository).unwrap_or(false) {
+        if webui_bundle_is_stale(&source).unwrap_or(false) {
             ui::hint("Web UI bundle is stale; omit `--no-build` so `./photon run` rebuilds the Vite app.");
         }
         ui::step("Starting Photon without building...");
@@ -223,34 +223,39 @@ fn start_dev_photon(source: &Path, application_args: &[OsString]) -> Result<Chil
     crate::process::start_managed(&mut command)
 }
 
-fn webui_directory(repository: &Path) -> PathBuf {
-    repository.join("Photon/WebUI")
+fn webui_directory(source: &Path) -> PathBuf {
+    source.join("Photon/WebUI")
 }
 
 /// Build the Vite production bundle so plain `./photon run` renders the
 /// bundled chrome without a dev server. Skipped only when the bundle is
 /// already newer than every WebUI source file.
-pub fn ensure_webui_production_build(repository: &Path) -> Result<()> {
+pub fn ensure_webui_production_build(repository: &Path, source: &Path) -> Result<()> {
     ensure_webui_dependencies(repository)?;
-    if !webui_bundle_is_stale(repository)? {
-        return Ok(());
+    if webui_bundle_is_stale(repository)? {
+        let web_ui_directory = webui_directory(repository);
+        ui::step("Building Photon Web UI (Vite production bundle)...");
+        let mut command = Command::new("npm");
+        command.args(["run", "build"]).current_dir(&web_ui_directory);
+        let code = crate::process::run_inherited(&mut command).context("failed to run `npm run build` in Photon/WebUI")?;
+        if code != 0 {
+            bail!("`npm run build` in Photon/WebUI failed with exit code {code}");
+        }
     }
-    let web_ui_directory = webui_directory(repository);
-    ui::step("Building Photon Web UI (Vite production bundle)...");
-    let mut command = Command::new("npm");
-    command.args(["run", "build"]).current_dir(&web_ui_directory);
-    let code = crate::process::run_inherited(&mut command).context("failed to run `npm run build` in Photon/WebUI")?;
-    if code != 0 {
-        bail!("`npm run build` in Photon/WebUI failed with exit code {code}");
-    }
+
+    let generated_bundle = webui_directory(repository).join("dist/index.html");
+    let build_bundle = webui_directory(source).join("dist/index.html");
+    fs::create_dir_all(build_bundle.parent().expect("bundle has parent directory"))?;
+    fs::copy(&generated_bundle, &build_bundle)
+        .with_context(|| format!("failed to stage generated Web UI bundle at {}", build_bundle.display()))?;
     ui::ok("Web UI ready", "Photon/WebUI/dist/index.html");
     Ok(())
 }
 
 /// Ensure `node_modules` exists so Vite build/dev commands can run.
 /// Runs `npm ci` when a lockfile is present, otherwise `npm install`.
-fn ensure_webui_dependencies(repository: &Path) -> Result<()> {
-    let web_ui_directory = webui_directory(repository);
+fn ensure_webui_dependencies(source: &Path) -> Result<()> {
+    let web_ui_directory = webui_directory(source);
     let node_modules = web_ui_directory.join("node_modules");
     if !needs_npm_install(&web_ui_directory, &node_modules)? {
         return Ok(());
@@ -289,8 +294,8 @@ fn needs_npm_install(web_ui_directory: &Path, node_modules: &Path) -> Result<boo
 
 /// True when `dist/index.html` is missing or older than any WebUI source,
 /// manifest, or Vite/TS configuration file.
-fn webui_bundle_is_stale(repository: &Path) -> Result<bool> {
-    let web_ui_directory = webui_directory(repository);
+fn webui_bundle_is_stale(source: &Path) -> Result<bool> {
+    let web_ui_directory = webui_directory(source);
     let bundle = web_ui_directory.join("dist/index.html");
     let Ok(bundle_metadata) = fs::metadata(&bundle) else {
         return Ok(true);
