@@ -891,6 +891,7 @@ button {
 
 .photon-settings-content {
     width: min(var(--photon-settings-width), 100%);
+    box-sizing: border-box;
     margin-inline: auto;
     padding-block: var(--photon-space-16) var(--photon-space-24);
 }
@@ -919,7 +920,7 @@ button {
 }
 
 .photon-settings-panel {
-    overflow: hidden;
+    overflow: visible;
     border: var(--photon-border-width) solid var(--photon-color-border);
     border-radius: var(--photon-radius-panel);
     background: var(--photon-color-surface);
@@ -929,7 +930,7 @@ button {
 .photon-settings-group {
     display: grid;
     gap: var(--photon-space-8);
-    padding: var(--photon-space-10);
+    padding: var(--photon-space-8);
 }
 
 .photon-settings-group + .photon-settings-group {
@@ -938,6 +939,7 @@ button {
 
 .photon-settings-group-header {
     display: flex;
+    min-width: 0;
     align-items: center;
     justify-content: space-between;
     gap: var(--photon-space-8);
@@ -948,6 +950,7 @@ button {
     align-items: center;
     justify-content: space-between;
     gap: var(--photon-space-6);
+    min-width: 0;
     cursor: pointer;
 }
 
@@ -973,15 +976,17 @@ button {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--photon-space-5);
-    padding-block: var(--photon-space-3);
+    gap: var(--photon-space-8);
+    min-width: 0;
 }
 
 .photon-settings-range-control {
     display: flex;
-    min-width: 190px;
+    flex: 0 1 240px;
+    min-width: min(190px, 42%);
     align-items: center;
     gap: var(--photon-space-3);
+    padding-inline: var(--photon-space-2);
 }
 
 .photon-settings-range-control input {
@@ -1000,6 +1005,14 @@ button {
     display: grid;
     min-width: 0;
     gap: var(--photon-space-2);
+}
+
+.photon-settings-toggle-row > .photon-settings-copy {
+    flex: 1 1 auto;
+}
+
+.photon-settings-range-row > .photon-settings-copy {
+    flex: 1 1 auto;
 }
 
 .photon-settings-copy h2 {
@@ -1074,6 +1087,19 @@ button {
     .photon-settings-group-header {
         align-items: flex-start;
         flex-direction: column;
+    }
+
+    .photon-settings-range-row {
+        align-items: stretch;
+        flex-direction: column;
+        gap: var(--photon-space-4);
+    }
+
+    .photon-settings-range-control {
+        width: 100%;
+        min-width: 0;
+        flex-basis: auto;
+        padding-inline: 0;
     }
 }
 
