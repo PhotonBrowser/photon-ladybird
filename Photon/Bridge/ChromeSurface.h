@@ -51,6 +51,7 @@ private:
     QUrl m_dev_server_origin;
     PhotonCommandTransport m_command_transport;
     bool m_trusted_document_loaded { false };
+    bool m_trusted_load_html_navigation_pending { false };
 };
 
 }

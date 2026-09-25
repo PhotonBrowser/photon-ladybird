@@ -7,7 +7,10 @@
 #include <Photon/Bridge/BrowserView.h>
 #include <Photon/Bridge/ChromeSurface.h>
 
+#include <AK/Debug.h>
+#include <AK/JsonValue.h>
 #include <LibURL/URL.h>
+#include <LibWebView/TrustedEmbedderMessaging.h>
 #include <UI/Qt/StringUtils.h>
 #include <UI/Qt/WebContentView.h>
 
@@ -88,16 +91,34 @@ void ChromeSurface::load(BrowserView const& browser)
         + QByteArrayLiteral("'), c => c.charCodeAt(0))));window.__photonPlatform='") + platform + QByteArrayLiteral("';</script>");
     html.insert(head_end, initial_state_script);
     auto document = QString::fromUtf8(html).toUtf8();
+    auto channel_result = m_view->enable_trusted_embedder_messaging([this](WebView::TrustedEmbedderMessage message) {
+        if (!m_trusted_document_loaded || !on_command)
+            return;
+        auto payload = message.payload.serialized();
+        auto payload_bytes = payload.bytes();
+        auto command = m_command_transport.decode_message(qstring_from_ak_string(message.type),
+            QByteArray(reinterpret_cast<char const*>(payload_bytes.data()), static_cast<qsizetype>(payload_bytes.size())));
+        if (command.has_value())
+            on_command(*command);
+    });
+    if (channel_result.is_error())
+        dbgln("Unable to enable Photon trusted message channel: {}", channel_result.error());
     m_trusted_document_loaded = true;
+    m_trusted_load_html_navigation_pending = true;
     m_view->load_html({ document.constData(), static_cast<size_t>(document.size()) });
 }
 
 void ChromeSurface::update_state(BrowserView const& browser)
 {
-    auto state = browser.tabs_json().toUtf8().toBase64();
-    auto script = QStringLiteral("window.dispatchEvent(new CustomEvent('photon-state', { detail: JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('%1'), c => c.charCodeAt(0)))) }));")
-                      .arg(QString::fromLatin1(state));
-    m_view->run_javascript(ak_string_from_qstring(script));
+    auto state_json = browser.tabs_json().toUtf8();
+    auto parsed_state = AK::JsonValue::from_string({ state_json.constData(), static_cast<size_t>(state_json.size()) });
+    if (parsed_state.is_error()) {
+        dbgln("Unable to parse Photon state event: {}", parsed_state.error());
+        return;
+    }
+    auto result = m_view->send_trusted_embedder_message({ "state"_string, parsed_state.release_value() });
+    if (result.is_error())
+        dbgln("Unable to send Photon state event through trusted messaging: {}", result.error());
 }
 
 void ChromeSurface::update_page_tooltip(QString const& text, QPoint position)
@@ -117,17 +138,22 @@ void ChromeSurface::clear_page_tooltip()
 
 void ChromeSurface::focus_address_bar()
 {
-    m_view->run_javascript(ak_string_from_qstring(QStringLiteral("window.dispatchEvent(new Event('photon-focus-address'));")));
+    auto result = m_view->send_trusted_embedder_message({ "focus-address"_string, AK::JsonValue { } });
+    if (result.is_error())
+        dbgln("Unable to send focus-address event through trusted messaging: {}", result.error());
 }
+
 
 bool ChromeSurface::handle_navigation_request(URL::URL const& url)
 {
-    if (m_command_transport.handles(url)) {
-        if (m_trusted_document_loaded && on_command) {
-            if (auto command = m_command_transport.decode(url))
-                on_command(*command);
-        }
-        return true;
+    // WebView::load_html() uses about:srcdoc internally. Permit exactly the
+    // navigation request initiated by this native load; this does not grant
+    // the document a bridge. The document capability remains tied to the
+    // explicit WebView opt-in and its generated navigation identity.
+    if (m_trusted_load_html_navigation_pending) {
+        m_trusted_load_html_navigation_pending = false;
+        if (url == URL::about_srcdoc())
+            return false;
     }
 
     QUrl parsed(qstring_from_ak_string(url.serialize()));

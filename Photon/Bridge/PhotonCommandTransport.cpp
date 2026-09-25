@@ -6,126 +6,131 @@
 
 #include <Photon/Bridge/PhotonCommandTransport.h>
 
-#include <UI/Qt/StringUtils.h>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 
-#include <QRegularExpression>
-#include <QUrl>
-#include <QUrlQuery>
+#include <algorithm>
 
 namespace Photon {
 
-bool PhotonCommandTransport::handles(URL::URL const& url) const
-{
-    return url.scheme() == "photon-command";
-}
-
 static bool is_valid_tab_id(QString const& value, uint64_t& tab_id)
 {
-    static QRegularExpression const pattern(QStringLiteral("^tab-([1-9][0-9]*)$"));
-    auto match = pattern.match(value);
-    if (!match.hasMatch())
+    if (!value.startsWith(QStringLiteral("tab-")))
         return false;
+
+    auto suffix = value.sliced(4);
+    if (suffix.isEmpty() || suffix.startsWith(QLatin1Char('0')))
+        return false;
+    for (auto character : suffix) {
+        if (!character.isDigit() || character.unicode() > 0x7f)
+            return false;
+    }
+
     bool converted = false;
-    tab_id = match.captured(1).toULongLong(&converted);
+    tab_id = suffix.toULongLong(&converted);
     return converted && tab_id != 0;
 }
 
-std::optional<PhotonCommand> PhotonCommandTransport::decode(URL::URL const& url) const
+std::optional<PhotonCommand> PhotonCommandTransport::decode_message(QString const& type, QByteArray const& payload) const
 {
-    if (!handles(url))
+    if (type.isEmpty() || type.size() > 128 || payload.size() > 64 * 1024)
         return { };
 
-    QUrl parsed(qstring_from_ak_string(url.serialize()));
-    if (!parsed.isValid() || !parsed.userInfo().isEmpty() || parsed.port(-1) != -1 || !parsed.path().isEmpty() || parsed.hasFragment())
+    QJsonParseError error;
+    auto const document = QJsonDocument::fromJson(payload, &error);
+    if (error.error != QJsonParseError::NoError || !document.isObject())
         return { };
+    auto const object = document.object();
+    auto has_exact_fields = [&](std::initializer_list<QStringView> fields) {
+        if (object.size() != static_cast<int>(fields.size()))
+            return false;
+        return std::all_of(fields.begin(), fields.end(), [&](QStringView field) { return object.contains(field); });
+    };
+    auto empty_payload = [&] { return object.isEmpty(); };
 
-    auto const items = QUrlQuery(parsed).queryItems(QUrl::FullyDecoded);
-    auto const command = parsed.host();
-    auto no_arguments = [&]() -> bool { return !parsed.hasQuery() && items.isEmpty(); };
-    if (command == QStringLiteral("back") && no_arguments())
+    if (type == QStringLiteral("back") && empty_payload())
         return BackCommand { };
-    if (command == QStringLiteral("forward") && no_arguments())
+    if (type == QStringLiteral("forward") && empty_payload())
         return ForwardCommand { };
-    if (command == QStringLiteral("reload") && no_arguments())
+    if (type == QStringLiteral("reload") && empty_payload())
         return ReloadCommand { };
-    if (command == QStringLiteral("new-tab") && no_arguments())
+    if (type == QStringLiteral("focus-address") && empty_payload())
+        return FocusAddressCommand { };
+    if (type == QStringLiteral("new-tab") && empty_payload())
         return NewTabCommand { };
-    if (command == QStringLiteral("open-settings") && no_arguments())
+    if (type == QStringLiteral("open-settings") && empty_payload())
         return OpenSettingsCommand { };
-
-    if (command == QStringLiteral("window-minimize") && no_arguments())
+    if (type == QStringLiteral("window-minimize") && empty_payload())
         return WindowControlCommand { WindowCommand::Minimize };
-    if (command == QStringLiteral("window-maximize") && no_arguments())
+    if (type == QStringLiteral("window-maximize") && empty_payload())
         return WindowControlCommand { WindowCommand::Maximize };
-    if (command == QStringLiteral("window-toggle-maximize") && no_arguments())
+    if (type == QStringLiteral("window-toggle-maximize") && empty_payload())
         return WindowControlCommand { WindowCommand::ToggleMaximize };
-    if (command == QStringLiteral("window-close") && no_arguments())
+    if (type == QStringLiteral("window-close") && empty_payload())
         return WindowControlCommand { WindowCommand::Close };
-    if ((command == QStringLiteral("window-drag") || command == QStringLiteral("window-start-system-move")) && no_arguments())
+    if (type == QStringLiteral("window-start-system-move") && empty_payload())
         return WindowControlCommand { WindowCommand::StartSystemMove };
 
-    if (items.size() != 1 || items.first().first != QStringLiteral("value"))
-        return { };
-    auto const& value = items.first().second;
-
-    if (command == QStringLiteral("navigate")) {
-        if (!value.trimmed().isEmpty())
-            return NavigateCommand { value };
+    if (type == QStringLiteral("navigate") && has_exact_fields({ u"url" })) {
+        auto const value = object.value(QStringLiteral("url"));
+        if (value.isString() && !value.toString().trimmed().isEmpty() && value.toString().size() <= 8192)
+            return NavigateCommand { value.toString() };
         return { };
     }
 
     uint64_t tab_id = 0;
-    if (command == QStringLiteral("select-tab") && is_valid_tab_id(value, tab_id))
-        return SelectTabCommand { tab_id };
-    if (command == QStringLiteral("close-tab") && is_valid_tab_id(value, tab_id))
-        return CloseTabCommand { tab_id };
-
-    if (command == QStringLiteral("reorder-tabs")) {
-        ReorderTabsCommand reorder;
-        for (auto const& item : value.split(QLatin1Char(','), Qt::KeepEmptyParts)) {
-            if (!is_valid_tab_id(item, tab_id))
-                return { };
-            reorder.tab_ids.append(tab_id);
-        }
-        if (!reorder.tab_ids.isEmpty())
-            return reorder;
-        return { };
+    if ((type == QStringLiteral("select-tab") || type == QStringLiteral("close-tab")) && has_exact_fields({ u"tabId" })) {
+        auto const value = object.value(QStringLiteral("tabId"));
+        if (!value.isString() || !is_valid_tab_id(value.toString(), tab_id))
+            return { };
+        return type == QStringLiteral("select-tab") ? PhotonCommand { SelectTabCommand { tab_id } } : PhotonCommand { CloseTabCommand { tab_id } };
     }
 
-    if (command == QStringLiteral("set-theme")) {
-        if (value == QStringLiteral("system"))
+    if (type == QStringLiteral("reorder-tabs") && has_exact_fields({ u"tabIds" })) {
+        auto const value = object.value(QStringLiteral("tabIds"));
+        if (!value.isArray() || value.toArray().isEmpty() || value.toArray().size() > 256)
+            return { };
+        ReorderTabsCommand command;
+        for (auto const& item : value.toArray()) {
+            if (!item.isString() || !is_valid_tab_id(item.toString(), tab_id))
+                return { };
+            command.tab_ids.append(tab_id);
+        }
+        return command;
+    }
+
+    if (type == QStringLiteral("set-theme") && has_exact_fields({ u"mode" })) {
+        auto const value = object.value(QStringLiteral("mode"));
+        if (!value.isString())
+            return { };
+        if (value.toString() == QStringLiteral("system"))
             return SetThemeCommand { ThemeMode::System };
-        if (value == QStringLiteral("light"))
+        if (value.toString() == QStringLiteral("light"))
             return SetThemeCommand { ThemeMode::Light };
-        if (value == QStringLiteral("dark"))
+        if (value.toString() == QStringLiteral("dark"))
             return SetThemeCommand { ThemeMode::Dark };
         return { };
     }
 
-    if (command == QStringLiteral("set-dim-overlays")) {
-        if (value == QStringLiteral("true"))
-            return SetDimOverlaysCommand { true };
-        if (value == QStringLiteral("false"))
-            return SetDimOverlaysCommand { false };
-        return { };
-    }
-
-    if (command == QStringLiteral("set-force-dark-pages")) {
-        if (value == QStringLiteral("true"))
-            return SetForceDarkPagesCommand { true };
-        if (value == QStringLiteral("false"))
-            return SetForceDarkPagesCommand { false };
-        return { };
-    }
-
-    if (command == QStringLiteral("capture")) {
-        auto parts = value.split(QLatin1Char(':'), Qt::KeepEmptyParts);
-        if (parts.size() != 2 || (parts[1] != QStringLiteral("open") && parts[1] != QStringLiteral("close")))
+    if ((type == QStringLiteral("set-force-dark-pages") || type == QStringLiteral("set-dim-overlays")) && has_exact_fields({ u"enabled" })) {
+        auto const value = object.value(QStringLiteral("enabled"));
+        if (!value.isBool())
             return { };
-        if (parts[0] == QStringLiteral("browser-menu"))
-            return SetOverlayCaptureCommand { OverlayRegion::BrowserMenu, parts[1] == QStringLiteral("open") };
-        if (parts[0] == QStringLiteral("site-info"))
-            return SetOverlayCaptureCommand { OverlayRegion::SiteInfo, parts[1] == QStringLiteral("open") };
+        if (type == QStringLiteral("set-force-dark-pages"))
+            return SetForceDarkPagesCommand { value.toBool() };
+        return SetDimOverlaysCommand { value.toBool() };
+    }
+
+    if (type == QStringLiteral("capture") && has_exact_fields({ u"region", u"open" })) {
+        auto const region = object.value(QStringLiteral("region"));
+        auto const open = object.value(QStringLiteral("open"));
+        if (!region.isString() || !open.isBool())
+            return { };
+        if (region.toString() == QStringLiteral("browser-menu"))
+            return SetOverlayCaptureCommand { OverlayRegion::BrowserMenu, open.toBool() };
+        if (region.toString() == QStringLiteral("site-info"))
+            return SetOverlayCaptureCommand { OverlayRegion::SiteInfo, open.toBool() };
     }
 
     return { };

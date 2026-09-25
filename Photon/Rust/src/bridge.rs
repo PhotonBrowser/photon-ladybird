@@ -53,14 +53,14 @@ pub unsafe extern "C" fn photon_app_observe_page(
         return 0;
     };
     let event = match observation.kind {
-        1 | 2 => {
+        1 | 2 | 5 => {
             let Some(text) = (unsafe { input_utf8(observation.text.data, observation.text.len) }) else {
                 return 0;
             };
-            if observation.kind == 1 {
-                PageObservation::Url(text)
-            } else {
-                PageObservation::Title(text)
+            match observation.kind {
+                1 => PageObservation::Url(text),
+                2 => PageObservation::Title(text),
+                _ => PageObservation::Favicon(text),
             }
         }
         3 => PageObservation::Loading(observation.first != 0),
@@ -91,6 +91,7 @@ enum PhotonAppCommandKind {
     SelectPreviousTab = 14,
     SelectNextTab = 15,
     FocusAddress = 16,
+    PageClosed = 17,
 }
 
 impl TryFrom<u32> for PhotonAppCommandKind {
@@ -114,6 +115,7 @@ impl TryFrom<u32> for PhotonAppCommandKind {
             14 => Ok(Self::SelectPreviousTab),
             15 => Ok(Self::SelectNextTab),
             16 => Ok(Self::FocusAddress),
+            17 => Ok(Self::PageClosed),
             _ => Err(()),
         }
     }
@@ -212,6 +214,7 @@ pub unsafe extern "C" fn photon_app_dispatch(
         PhotonAppCommandKind::OpenSettings => AppCommand::OpenSettings,
         PhotonAppCommandKind::SelectTab => AppCommand::SelectTab(command.value),
         PhotonAppCommandKind::CloseTab => AppCommand::CloseTab(command.value),
+        PhotonAppCommandKind::PageClosed => AppCommand::PageClosed(command.value),
         PhotonAppCommandKind::ReorderTabs => {
             // SAFETY: The caller guarantees this buffer remains live for this call.
             let Some(ids) = (unsafe { input_ids(command.ids, command.ids_len) }) else {
@@ -346,21 +349,6 @@ pub unsafe extern "C" fn photon_browser_tabs_json(state: *mut PhotonBrowserState
     };
     state.snapshot_json = state.app.browser.snapshot_json();
     borrowed_utf8(Some(&state.snapshot_json))
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn photon_browser_set_favicon(
-    state: *mut PhotonBrowserState,
-    tab_id: u64,
-    data: *const u8,
-    len: usize,
-) -> u8 {
-    // SAFETY: The caller supplies a live state and an input buffer valid for this call.
-    let (Some(state), Some(value)) = (unsafe { state.as_mut() }, unsafe { input_utf8(data, len) }) else {
-        return 0;
-    };
-    let favicon_url = (!value.is_empty()).then_some(value);
-    state.app.browser.set_favicon(tab_id, favicon_url).into()
 }
 
 unsafe fn input_ids<'a>(ids: *const u64, len: usize) -> Option<&'a [u64]> {

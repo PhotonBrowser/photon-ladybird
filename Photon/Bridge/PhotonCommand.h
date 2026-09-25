@@ -20,6 +20,7 @@ struct NavigateCommand {
 struct BackCommand { };
 struct ForwardCommand { };
 struct ReloadCommand { };
+struct FocusAddressCommand { };
 struct NewTabCommand { };
 struct OpenSettingsCommand { };
 struct SelectTabCommand {
@@ -75,6 +76,7 @@ using PhotonCommand = std::variant<
     BackCommand,
     ForwardCommand,
     ReloadCommand,
+    FocusAddressCommand,
     NewTabCommand,
     OpenSettingsCommand,
     SelectTabCommand,

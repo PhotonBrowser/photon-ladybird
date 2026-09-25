@@ -11,6 +11,7 @@ pub(crate) enum PageObservation<'a> {
     Title(&'a str),
     Loading(bool),
     Navigation(NavigationCapabilities),
+    Favicon(&'a str),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -27,6 +28,7 @@ pub(crate) enum AppCommand<'a> {
     OpenSettings,
     SelectTab(u64),
     CloseTab(u64),
+    PageClosed(u64),
     ReorderTabs(&'a [u64]),
     SetTheme(ThemeMode),
     SetForceDarkPages(bool),
@@ -70,6 +72,9 @@ impl PhotonApp {
             PageObservation::Title(title) => self.browser.set_title(tab_id, title),
             PageObservation::Loading(loading) => self.browser.set_loading(tab_id, loading),
             PageObservation::Navigation(capabilities) => self.browser.set_navigation_capabilities(tab_id, capabilities),
+            PageObservation::Favicon(data_url) => self
+                .browser
+                .set_favicon(tab_id, (!data_url.is_empty()).then_some(data_url)),
         }
     }
 
@@ -92,6 +97,16 @@ impl PhotonApp {
                 effects.accepted = self.browser.select_tab(tab_id);
             }
             AppCommand::CloseTab(tab_id) => {
+                if !self.browser.contains_tab(tab_id) {
+                    return effects;
+                }
+                if self.browser.tab_count() == 1 {
+                    return self.dispatch(AppCommand::PageClosed(tab_id));
+                }
+                effects.accepted = true;
+                effects.requested_close_tab_id = tab_id;
+            }
+            AppCommand::PageClosed(tab_id) => {
                 effects.accepted = self.browser.close_tab(tab_id);
                 if effects.accepted {
                     effects.tabs_changed = true;
@@ -149,8 +164,7 @@ impl PhotonApp {
                 effects.accepted = effects.navigation.is_some();
             }
             AppCommand::CloseActiveTab => {
-                effects.accepted = true;
-                effects.requested_close_tab_id = self.browser.active_tab_id();
+                return self.dispatch(AppCommand::CloseTab(self.browser.active_tab_id()));
             }
             AppCommand::SelectAdjacentTab { previous } => {
                 return self.dispatch(AppCommand::SelectTab(self.browser.adjacent_tab_id(previous)));
@@ -162,7 +176,7 @@ impl PhotonApp {
         }
 
         effects.active_tab_changed = old_active_tab_id != self.browser.active_tab_id()
-            || matches!(command, AppCommand::CloseTab(_)) && effects.removed_tab_id == 0 && effects.accepted;
+            || matches!(command, AppCommand::PageClosed(_)) && effects.removed_tab_id == 0 && effects.accepted;
         effects.state_changed |= effects.tabs_changed || effects.active_tab_changed;
         effects
     }
@@ -179,12 +193,40 @@ mod tests {
         let first_tab_id = app.browser.active_tab_id();
         let created = app.dispatch(AppCommand::CreateTab);
 
-        let effects = app.dispatch(AppCommand::CloseTab(created.created_tab_id));
+        let effects = app.dispatch(AppCommand::PageClosed(created.created_tab_id));
 
         assert!(effects.accepted);
         assert_eq!(effects.removed_tab_id, created.created_tab_id);
         assert!(effects.active_tab_changed);
         assert_eq!(app.browser.active_tab_id(), first_tab_id);
+    }
+
+    #[test]
+    fn requested_multi_tab_close_waits_for_page_closed_observation() {
+        let mut app = PhotonApp::new(BrowserState::initial());
+        let first = app.browser.active_tab_id();
+        let second = app.dispatch(AppCommand::CreateTab).created_tab_id;
+
+        let request = app.dispatch(AppCommand::CloseTab(first));
+        assert!(request.accepted);
+        assert_eq!(request.requested_close_tab_id, first);
+        assert!(request.removed_tab_id == 0);
+        assert_eq!(app.browser.active_tab_id(), second);
+        assert!(app.browser.contains_tab(first));
+
+        let closed = app.dispatch(AppCommand::PageClosed(first));
+        assert_eq!(closed.removed_tab_id, first);
+        assert_eq!(app.browser.active_tab_id(), second);
+        assert!(!app.browser.contains_tab(first));
+    }
+
+    #[test]
+    fn favicon_observation_updates_rust_snapshot_state() {
+        let mut app = PhotonApp::new(BrowserState::initial());
+        let tab_id = app.browser.active_tab_id();
+        app.dispatch(AppCommand::Navigate("example.com"));
+        assert!(app.observe_page(tab_id, PageObservation::Favicon("data:image/png;base64,AA==")));
+        assert!(app.browser.snapshot_json().contains("data:image/png;base64,AA=="));
     }
 
     #[test]

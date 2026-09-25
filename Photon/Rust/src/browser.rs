@@ -145,7 +145,6 @@ impl BrowserState {
         self.tab(tab_id).is_some()
     }
 
-    #[cfg(test)]
     pub(crate) fn tab_count(&self) -> usize {
         self.tabs.len()
     }

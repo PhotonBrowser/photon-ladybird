@@ -83,12 +83,12 @@ export default function App({ api }: AppProps): React.JSX.Element {
             setPageTooltip(null);
             showTimer = window.setTimeout(() => setPageTooltip(detail), 600);
         };
-        window.addEventListener("photon-page-tooltip", showTooltip);
-        window.addEventListener("photon-page-tooltip-clear", clearTooltip);
+        window.addEventListener("photon-ui-page-tooltip", showTooltip);
+        window.addEventListener("photon-ui-page-tooltip-clear", clearTooltip);
         return () => {
             window.clearTimeout(showTimer);
-            window.removeEventListener("photon-page-tooltip", showTooltip);
-            window.removeEventListener("photon-page-tooltip-clear", clearTooltip);
+            window.removeEventListener("photon-ui-page-tooltip", showTooltip);
+            window.removeEventListener("photon-ui-page-tooltip-clear", clearTooltip);
         };
     }, []);
 
@@ -105,8 +105,8 @@ export default function App({ api }: AppProps): React.JSX.Element {
             addressInput.current?.focus();
             addressInput.current?.select();
         };
-        window.addEventListener("photon-focus-address", focusAddressBar);
-        return () => window.removeEventListener("photon-focus-address", focusAddressBar);
+        window.addEventListener("photon-ui-focus-address", focusAddressBar);
+        return () => window.removeEventListener("photon-ui-focus-address", focusAddressBar);
     }, [activeOverlay, api]);
 
     return (

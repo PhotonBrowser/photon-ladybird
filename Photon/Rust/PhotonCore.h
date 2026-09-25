@@ -29,7 +29,7 @@ typedef struct PhotonAppCommand {
 } PhotonAppCommand;
 
 typedef struct PhotonPageObservation {
-    uint32_t kind; // 1 URL, 2 title, 3 loading, 4 history capabilities.
+    uint32_t kind; // 1 URL, 2 title, 3 loading, 4 history capabilities, 5 favicon data URL.
     uint64_t tab_id;
     PhotonUtf8 text;
     uint8_t first;
@@ -69,6 +69,7 @@ enum PhotonAppCommandKind {
     PhotonAppCommandKind_SelectPreviousTab = 14,
     PhotonAppCommandKind_SelectNextTab = 15,
     PhotonAppCommandKind_FocusAddress = 16,
+    PhotonAppCommandKind_PageClosed = 17,
 };
 
 PhotonBrowserState* photon_browser_state_new(uint8_t const* config_path, size_t config_path_len);
@@ -87,8 +88,6 @@ uint8_t photon_browser_force_dark_pages(PhotonBrowserState const* state);
 PhotonUtf8 photon_browser_tabs_json(PhotonBrowserState* state);
 PhotonAppEffects photon_app_dispatch(PhotonBrowserState* state, PhotonAppCommand command);
 uint8_t photon_app_observe_page(PhotonBrowserState* state, PhotonPageObservation observation);
-
-uint8_t photon_browser_set_favicon(PhotonBrowserState* state, uint64_t tab_id, uint8_t const* data, size_t len);
 
 #ifdef __cplusplus
 }

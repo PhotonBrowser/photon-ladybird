@@ -203,7 +203,7 @@ Ladybird::WebContentView& BrowserView::create_view(uint64_t tab_id)
             emit page_tooltip_cleared();
     };
     view->on_close = [this, tab_id] {
-        apply_app_effects(dispatch_app_command(m_state, PhotonAppCommandKind_CloseTab, tab_id));
+        apply_app_effects(dispatch_app_command(m_state, PhotonAppCommandKind_PageClosed, tab_id));
     };
     view->on_favicon_change = [this, tab_id](Optional<Gfx::Bitmap const&> const& favicon) {
         auto favicon_url = QString { };
@@ -217,7 +217,8 @@ Ladybird::WebContentView& BrowserView::create_view(uint64_t tab_id)
             favicon_url = QStringLiteral("data:image/png;base64,") + qstring_from_ak_string(encoded.value().bytes());
         }
         auto utf8 = favicon_url.toUtf8();
-        if (photon_browser_set_favicon(m_state, tab_id, reinterpret_cast<uint8_t const*>(utf8.constData()), static_cast<size_t>(utf8.size())) == 0)
+        PhotonPageObservation observation { 5, tab_id, { reinterpret_cast<uint8_t const*>(utf8.constData()), static_cast<size_t>(utf8.size()) }, 0, 0 };
+        if (photon_app_observe_page(m_state, observation) == 0)
             return;
         emit browser_state_changed();
     };
@@ -305,19 +306,7 @@ bool BrowserView::request_focus_address()
 
 void BrowserView::close_tab(uint64_t tab_id)
 {
-    auto* view = m_views.value(tab_id);
-    if (!view)
-        return;
-
-    // Keep the final native view alive: the Rust state resets the last tab in place.
-    if (m_views.size() == 1) {
-        apply_app_effects(dispatch_app_command(m_state, PhotonAppCommandKind_CloseTab, tab_id));
-        return;
-    }
-
-    // WebContent calls on_close only after its top-level traversable has completed closing.
-    // That callback removes the Rust tab and its native view.
-    view->request_close();
+    apply_app_effects(dispatch_app_command(m_state, PhotonAppCommandKind_CloseTab, tab_id));
 }
 
 void BrowserView::reorder_tabs(QList<uint64_t> const& tab_ids)
@@ -346,8 +335,11 @@ void BrowserView::apply_app_effects(PhotonAppEffects const& effects)
 {
     if (!effects.accepted)
         return;
-    if (effects.requested_close_tab_id != 0)
-        close_tab(effects.requested_close_tab_id);
+    if (effects.requested_close_tab_id != 0) {
+        // Rust validated the tab and decided a native close request is required.
+        if (auto* view = m_views.value(effects.requested_close_tab_id))
+            view->request_close();
+    }
     switch (effects.navigation_kind) {
     case 0:
         break;

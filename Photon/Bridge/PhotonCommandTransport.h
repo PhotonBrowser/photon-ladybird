@@ -8,17 +8,16 @@
 
 #include <Photon/Bridge/PhotonCommand.h>
 
-#include <LibURL/URL.h>
-
+#include <QByteArray>
+#include <QString>
 #include <optional>
 
 namespace Photon {
 
-// Temporary adapter from the trusted chrome's navigation requests to typed commands.
+// Validates structured messages from the trusted chrome against Photon commands.
 class PhotonCommandTransport {
 public:
-    bool handles(URL::URL const&) const;
-    std::optional<PhotonCommand> decode(URL::URL const&) const;
+    std::optional<PhotonCommand> decode_message(QString const& type, QByteArray const& payload) const;
 };
 
 }

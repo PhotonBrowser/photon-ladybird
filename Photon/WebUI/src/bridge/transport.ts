@@ -6,6 +6,7 @@ export type PhotonCommand =
     | { kind: "back" }
     | { kind: "forward" }
     | { kind: "reload" }
+    | { kind: "focus-address" }
     | { kind: "new-tab" }
     | { kind: "open-settings" }
     | { kind: "select-tab"; tabId: string }
@@ -23,38 +24,101 @@ export type PhotonCommand =
 
 export interface PhotonCommandTransport {
     dispatch(command: PhotonCommand): void;
+    subscribe(listener: (event: PhotonTransportEvent) => void): () => void;
 }
 
-/** The navigation transport is temporary; callers depend only on PhotonCommand. */
-export function createNavigationCommandTransport(enabled: boolean): PhotonCommandTransport {
+export type PhotonTransportEvent =
+    | { type: "state"; detail: unknown }
+    | { type: "page-tooltip"; detail: { text: string; x: number; y: number } }
+    | { type: "page-tooltip-clear" }
+    | { type: "focus-address" };
+
+/** Dispatch Photon commands only through the trusted native messaging channel. */
+export function createPhotonCommandTransport(enabled: boolean): PhotonCommandTransport {
+    const listeners = new Set<(event: PhotonTransportEvent) => void>();
     return {
         dispatch(command) {
-            if (!enabled) return;
-            const { name, value } = serializeCommand(command);
-            const query = value === undefined ? "" : `?value=${encodeURIComponent(value)}`;
-            window.location.href = `photon-command://${name}${query}`;
+            if (!enabled) {
+                throw new Error("Photon native bridge is unavailable; privileged commands cannot be dispatched.");
+            }
+            const nativeChannel = window.embedderMessaging;
+            if (!nativeChannel) {
+                throw new Error("Photon trusted messaging channel is unavailable.");
+            }
+            const { type, payload } = serializeNativeCommand(command);
+            nativeChannel.postMessage(type, payload);
+        },
+        subscribe(listener) {
+            if (!enabled) return () => {};
+            listeners.add(listener);
+            const onNativeMessage = (): void => {
+                const channel = window.embedderMessaging;
+                if (!channel) return;
+                let messages: unknown;
+                try {
+                    messages = JSON.parse(channel.receiveMessages()) as unknown;
+                } catch {
+                    return;
+                }
+                if (!Array.isArray(messages)) return;
+                for (const value of messages) {
+                    if (!value || typeof value !== "object") continue;
+                    const message = value as Record<string, unknown>;
+                    if (typeof message.type !== "string") continue;
+                    if (message.type === "state") {
+                        for (const currentListener of listeners)
+                            currentListener({ type: "state", detail: message.payload });
+                    } else if (message.type === "focus-address") {
+                        for (const currentListener of listeners) currentListener({ type: "focus-address" });
+                    }
+                }
+            };
+            document.addEventListener("TrustedEmbedderMessageAvailable", onNativeMessage);
+            onNativeMessage();
+            const handlers: Array<[string, (event: Event) => void]> = [
+                [
+                    "photon-page-tooltip",
+                    (event) => {
+                        const detail = (event as CustomEvent<unknown>).detail;
+                        if (!isPageTooltip(detail)) return;
+                        listener({ type: "page-tooltip", detail });
+                    },
+                ],
+                ["photon-page-tooltip-clear", () => listener({ type: "page-tooltip-clear" })],
+            ];
+            for (const [name, handler] of handlers) window.addEventListener(name, handler);
+            return () => {
+                listeners.delete(listener);
+                document.removeEventListener("TrustedEmbedderMessageAvailable", onNativeMessage);
+                for (const [name, handler] of handlers) window.removeEventListener(name, handler);
+            };
         },
     };
 }
 
-function serializeCommand(command: PhotonCommand): { name: string; value?: string } {
+function isPageTooltip(value: unknown): value is { text: string; x: number; y: number } {
+    if (!value || typeof value !== "object") return false;
+    const detail = value as Record<string, unknown>;
+    return typeof detail.text === "string" && typeof detail.x === "number" && typeof detail.y === "number";
+}
+
+function serializeNativeCommand(command: PhotonCommand): { type: string; payload: Record<string, unknown> } {
     switch (command.kind) {
         case "navigate":
-            return { name: command.kind, value: command.url };
+            return { type: command.kind, payload: { url: command.url } };
         case "select-tab":
         case "close-tab":
-            return { name: command.kind, value: command.tabId };
+            return { type: command.kind, payload: { tabId: command.tabId } };
         case "reorder-tabs":
-            return { name: command.kind, value: command.tabIds.join(",") };
+            return { type: command.kind, payload: { tabIds: command.tabIds } };
         case "capture":
-            return { name: command.kind, value: `${command.region}:${command.open ? "open" : "close"}` };
+            return { type: command.kind, payload: { region: command.region, open: command.open } };
         case "set-theme":
-            return { name: command.kind, value: command.mode };
+            return { type: command.kind, payload: { mode: command.mode } };
         case "set-dim-overlays":
         case "set-force-dark-pages":
-            return { name: command.kind, value: String(command.enabled) };
+            return { type: command.kind, payload: { enabled: command.enabled } };
         case "window-start-system-move":
-            return { name: "window-drag" };
         case "window-minimize":
         case "window-maximize":
         case "window-toggle-maximize":
@@ -62,9 +126,10 @@ function serializeCommand(command: PhotonCommand): { name: string; value?: strin
         case "back":
         case "forward":
         case "reload":
+        case "focus-address":
         case "new-tab":
         case "open-settings":
-            return { name: command.kind };
+            return { type: command.kind, payload: {} };
         default:
             return assertNever(command);
     }

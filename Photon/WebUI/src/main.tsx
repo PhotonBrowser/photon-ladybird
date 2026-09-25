@@ -2,7 +2,7 @@
 import { createRoot } from "react-dom/client";
 
 import App from "./App";
-import { createNavigationCommandTransport } from "./bridge/transport";
+import { createPhotonCommandTransport } from "./bridge/transport";
 import "./styles.css";
 import type { BrowserSnapshot, PhotonApi, ThemeMode } from "./types";
 
@@ -42,7 +42,7 @@ const listeners = new Set<(state: BrowserSnapshot) => void>();
 const nativeBridgeAvailable = window.__photonInitialState !== undefined || searchParams.has("photonInitialState");
 const platform = window.__photonPlatform ?? (searchParams.get("photonPlatform") === "macos" ? "macos" : "other");
 
-const commandTransport = createNavigationCommandTransport(nativeBridgeAvailable);
+const commandTransport = createPhotonCommandTransport(nativeBridgeAvailable);
 
 const parseThemeMode = (value: unknown): ThemeMode | undefined =>
     value === "system" || value === "light" || value === "dark" ? value : undefined;
@@ -93,12 +93,19 @@ const photon: PhotonApi = {
 
 window.photon = photon;
 
-window.addEventListener("photon-state", (event: Event) => {
-    const next = (event as CustomEvent<unknown>).detail;
-    if (!isBrowserSnapshot(next)) return;
-    snapshot = next;
-    applyTheme(next.themeMode);
-    for (const listener of listeners) listener(next);
+commandTransport.subscribe((event) => {
+    if (event.type === "state") {
+        if (!isBrowserSnapshot(event.detail)) return;
+        snapshot = event.detail;
+        applyTheme(event.detail.themeMode);
+        for (const listener of listeners) listener(event.detail);
+    } else if (event.type === "page-tooltip") {
+        window.dispatchEvent(new CustomEvent("photon-ui-page-tooltip", { detail: event.detail }));
+    } else if (event.type === "page-tooltip-clear") {
+        window.dispatchEvent(new Event("photon-ui-page-tooltip-clear"));
+    } else if (event.type === "focus-address") {
+        window.dispatchEvent(new Event("photon-ui-focus-address"));
+    }
 });
 
 function isBrowserSnapshot(value: unknown): value is BrowserSnapshot {

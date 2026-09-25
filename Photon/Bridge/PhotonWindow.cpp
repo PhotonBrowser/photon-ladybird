@@ -260,7 +260,10 @@ void Window::dispatch_command(PhotonCommand const& command)
             m_browser->go_forward();
         else if constexpr (std::is_same_v<Command, ReloadCommand>)
             m_browser->reload();
-        else if constexpr (std::is_same_v<Command, NewTabCommand>)
+        else if constexpr (std::is_same_v<Command, FocusAddressCommand>) {
+            if (m_browser->request_focus_address())
+                m_scene->focus_address_bar();
+        } else if constexpr (std::is_same_v<Command, NewTabCommand>)
             m_browser->create_tab();
         else if constexpr (std::is_same_v<Command, OpenSettingsCommand>)
             m_browser->open_settings();
