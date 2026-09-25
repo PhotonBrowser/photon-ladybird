@@ -50,9 +50,18 @@ export default function App({ api }: AppProps): React.JSX.Element {
     const addressInput = useRef<HTMLInputElement>(null);
     const [activeOverlay, setActiveOverlay] = useState<BrowserOverlay | null>(null);
     const [pageTooltip, setPageTooltip] = useState<PageTooltip | null>(null);
+    const [crashNotice, setCrashNotice] = useState<string | null>(null);
+    const titlebarDragRegion = useRef(false);
     const activeTab = snapshot.tabs.find((tab) => tab.id === snapshot.activeTabId);
+    const activeTabId = activeTab?.id;
+    const activeTabInternalPage = activeTab?.internalPage;
     const activeTabKey = `${activeTab?.id ?? ""}:${activeTab?.url ?? ""}`;
     const previousActiveTabKey = useRef(activeTabKey);
+    const tabFocus = useRef({
+        activeTabId: null as string | null,
+        tabCount: snapshot.tabs.length,
+        focusedTabIds: new Set<string>(),
+    });
 
     const setOverlayOpen = (name: BrowserOverlay, open: boolean, notifyNative = true): void => {
         if (notifyNative && name !== "settings-theme") api.ui.setCaptureRegion(name, open);
@@ -60,6 +69,14 @@ export default function App({ api }: AppProps): React.JSX.Element {
             if (open) return name;
             return current === name ? null : current;
         });
+    };
+
+    const updateTitlebarDragRegion = (target: EventTarget | null): void => {
+        const element = target instanceof Element ? target : null;
+        const enabled = Boolean(element && !element.closest("button, input, a, [role='tab']"));
+        if (titlebarDragRegion.current === enabled) return;
+        titlebarDragRegion.current = enabled;
+        api.window.setTitlebarDragRegion(enabled);
     };
 
     useEffect(() => {
@@ -71,9 +88,20 @@ export default function App({ api }: AppProps): React.JSX.Element {
     }, [activeOverlay, activeTabKey, api]);
 
     useLayoutEffect(() => {
-        if (activeTab?.internalPage !== "new-tab") return;
-        addressInput.current?.focus();
-    }, [activeTab?.id, activeTab?.internalPage]);
+        const focusState = tabFocus.current;
+        const isNewTab = focusState.activeTabId === null || snapshot.tabs.length > focusState.tabCount;
+        const changedActiveTab = focusState.activeTabId !== activeTabId;
+        focusState.activeTabId = activeTabId ?? null;
+        focusState.tabCount = snapshot.tabs.length;
+
+        if (!activeTabId || !changedActiveTab) return;
+        if (isNewTab && activeTabInternalPage === "new-tab") focusState.focusedTabIds.add(activeTabId);
+        if (focusState.focusedTabIds.has(activeTabId)) {
+            addressInput.current?.focus();
+            return;
+        }
+        addressInput.current?.blur();
+    }, [activeTabId, activeTabInternalPage, snapshot.tabs]);
 
     useEffect(() => {
         let showTimer = 0;
@@ -98,6 +126,24 @@ export default function App({ api }: AppProps): React.JSX.Element {
     }, []);
 
     useEffect(() => {
+        let hideTimer = 0;
+        const showCrashNotice = (message: string) => (): void => {
+            window.clearTimeout(hideTimer);
+            setCrashNotice(message);
+            hideTimer = window.setTimeout(() => setCrashNotice(null), 4000);
+        };
+        const showPageCrash = showCrashNotice("Page crashed. Reloading…");
+        const showChromeCrash = showCrashNotice("Photon restarted after a browser UI crash.");
+        window.addEventListener("photon-ui-page-crashed", showPageCrash);
+        window.addEventListener("photon-ui-chrome-crashed", showChromeCrash);
+        return () => {
+            window.clearTimeout(hideTimer);
+            window.removeEventListener("photon-ui-page-crashed", showPageCrash);
+            window.removeEventListener("photon-ui-chrome-crashed", showChromeCrash);
+        };
+    }, []);
+
+    useEffect(() => {
         if (activeOverlay) setPageTooltip(null);
     }, [activeOverlay]);
 
@@ -110,30 +156,35 @@ export default function App({ api }: AppProps): React.JSX.Element {
             addressInput.current?.focus();
             addressInput.current?.select();
         };
-        const blurAddressBar = (): void => addressInput.current?.blur();
+        const blurAddressBar = (): void => {
+            if (activeTab) tabFocus.current.focusedTabIds.delete(activeTab.id);
+            addressInput.current?.blur();
+        };
         window.addEventListener("photon-ui-focus-address", focusAddressBar);
         window.addEventListener("photon-ui-blur-address", blurAddressBar);
         return () => {
             window.removeEventListener("photon-ui-focus-address", focusAddressBar);
             window.removeEventListener("photon-ui-blur-address", blurAddressBar);
         };
-    }, [activeOverlay, api]);
+    }, [activeOverlay, activeTab, api]);
 
     return (
         <div className="photon-shell" data-dim-overlays={snapshot.dimOverlays}>
             <div className="photon-chrome">
                 <div
                     className="photon-titlebar"
+                    role="toolbar"
+                    aria-label="Window title bar"
+                    onPointerMove={(event) => updateTitlebarDragRegion(event.target)}
+                    onPointerLeave={() => updateTitlebarDragRegion(null)}
                     onPointerDown={(event) => {
-                        if (event.button !== 0 || (event.target as Element).closest("button, input, a, [role='tab']"))
-                            return;
-                        // Handle the second press before another native move can claim the gesture.
-                        if (event.detail === 2) {
-                            api.window.maximize();
-                            return;
-                        }
-                        if (event.detail > 2) return;
-                        api.window.beginDrag();
+                        updateTitlebarDragRegion(event.target);
+                        if (event.button !== 0 || event.detail !== 2) return;
+                        const target = event.target as Element;
+                        const isTabLabel = Boolean(
+                            target.closest("[role='tab']") && !target.closest(".photon-tab-close"),
+                        );
+                        if (isTabLabel || !target.closest("button, input, a")) api.window.toggleMaximize();
                     }}
                 >
                     <TabStrip activeTabId={snapshot.activeTabId} api={api} tabs={snapshot.tabs} />
@@ -143,6 +194,7 @@ export default function App({ api }: AppProps): React.JSX.Element {
                     api={api}
                     menuOpen={activeOverlay === "browser-menu"}
                     onMenuOpenChange={(open, notifyNative) => setOverlayOpen("browser-menu", open, notifyNative)}
+                    onAddressFocus={(tabId) => tabFocus.current.focusedTabIds.add(tabId)}
                     onSiteInfoOpenChange={(open, notifyNative) => setOverlayOpen("site-info", open, notifyNative)}
                     siteInfoOpen={activeOverlay === "site-info"}
                     snapshot={snapshot}
@@ -159,6 +211,11 @@ export default function App({ api }: AppProps): React.JSX.Element {
                 />
             )}
             {pageTooltip && !activeOverlay ? <BrowserTooltip tooltip={pageTooltip} /> : null}
+            {crashNotice ? (
+                <div aria-live="polite" className="photon-crash-notice" role="status">
+                    {crashNotice}
+                </div>
+            ) : null}
             {activeTab?.internalPage === "new-tab" ? <NewTabPage /> : null}
             {activeTab?.internalPage === "settings" ? (
                 <SettingsPage

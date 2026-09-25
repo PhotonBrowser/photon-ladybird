@@ -6,6 +6,17 @@ import { createPhotonCommandTransport } from "./bridge/transport";
 import "./styles.css";
 import type { BrowserSnapshot, PhotonApi, ThemeMode } from "./types";
 
+if (!window.embedderMessaging) {
+    await new Promise<void>((resolve) => {
+        const onReady = (): void => {
+            if (!window.embedderMessaging) return;
+            document.removeEventListener("TrustedEmbedderMessagingReady", onReady);
+            resolve();
+        };
+        document.addEventListener("TrustedEmbedderMessagingReady", onReady);
+    });
+}
+
 const searchParams = new URLSearchParams(window.location.search);
 
 const developmentSnapshot: BrowserSnapshot = {
@@ -75,7 +86,7 @@ const photon: PhotonApi = {
     },
     window: {
         platform,
-        beginDrag: () => commandTransport.dispatch({ kind: "window-start-system-move" }),
+        setTitlebarDragRegion: (enabled) => commandTransport.dispatch({ kind: "set-titlebar-drag-region", enabled }),
         minimize: () => commandTransport.dispatch({ kind: "window-minimize" }),
         maximize: () => commandTransport.dispatch({ kind: "window-maximize" }),
         toggleMaximize: () => commandTransport.dispatch({ kind: "window-toggle-maximize" }),
@@ -105,6 +116,10 @@ commandTransport.subscribe((event) => {
         window.dispatchEvent(new CustomEvent("photon-ui-page-tooltip", { detail: event.detail }));
     } else if (event.type === "page-tooltip-clear") {
         window.dispatchEvent(new Event("photon-ui-page-tooltip-clear"));
+    } else if (event.type === "page-crashed") {
+        window.dispatchEvent(new Event("photon-ui-page-crashed"));
+    } else if (event.type === "chrome-crashed") {
+        window.dispatchEvent(new Event("photon-ui-chrome-crashed"));
     } else if (event.type === "focus-address") {
         window.dispatchEvent(new Event("photon-ui-focus-address"));
     } else if (event.type === "blur-address") {
@@ -157,3 +172,8 @@ const rootElement = document.getElementById("root");
 if (!rootElement) throw new Error("Photon Web UI root element is missing");
 
 createRoot(rootElement).render(<App api={photon} />);
+// Wait until React has committed the shell and the browser has had one frame
+// to paint it before allowing the first webpage to appear beneath the chrome.
+window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => commandTransport.dispatch({ kind: "ui-ready" }));
+});

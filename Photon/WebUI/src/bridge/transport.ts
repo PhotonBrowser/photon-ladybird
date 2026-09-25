@@ -7,6 +7,7 @@ export type PhotonCommand =
     | { kind: "forward" }
     | { kind: "reload" }
     | { kind: "focus-address" }
+    | { kind: "ui-ready" }
     | { kind: "new-tab" }
     | { kind: "open-settings" }
     | { kind: "select-tab"; tabId: string }
@@ -21,7 +22,7 @@ export type PhotonCommand =
     | { kind: "window-maximize" }
     | { kind: "window-toggle-maximize" }
     | { kind: "window-close" }
-    | { kind: "window-start-system-move" };
+    | { kind: "set-titlebar-drag-region"; enabled: boolean };
 
 export interface PhotonCommandTransport {
     dispatch(command: PhotonCommand): void;
@@ -32,57 +33,19 @@ export type PhotonTransportEvent =
     | { type: "state"; detail: unknown }
     | { type: "page-tooltip"; detail: { text: string; x: number; y: number } }
     | { type: "page-tooltip-clear" }
+    | { type: "page-crashed" }
+    | { type: "chrome-crashed" }
     | { type: "focus-address" }
     | { type: "blur-address" };
 
 /** Dispatch Photon commands only through the trusted native messaging channel. */
 export function createPhotonCommandTransport(): PhotonCommandTransport {
     const listeners = new Set<(event: PhotonTransportEvent) => void>();
-    const pendingCommands: PhotonCommand[] = [];
-    let bridgePoll: number | undefined;
-    let bridgePollAttempts = 0;
-
-    const flushPendingCommands = (): void => {
-        const nativeChannel = window.embedderMessaging;
-        if (!nativeChannel) {
-            if (++bridgePollAttempts >= 100) {
-                pendingCommands.length = 0;
-                bridgePoll = undefined;
-                console.error("Photon command was not sent: the trusted native messaging channel is unavailable.");
-                return;
-            }
-            bridgePoll = window.setTimeout(flushPendingCommands, 10);
-            return;
-        }
-        bridgePoll = undefined;
-        bridgePollAttempts = 0;
-        for (const command of pendingCommands.splice(0)) {
-            const { type, payload } = serializeNativeCommand(command);
-            nativeChannel.postMessage(type, payload);
-        }
-    };
-
-    // Ladybird installs the trusted document binding after top-level load
-    // completion. Keep commands issued during that short window until it is
-    // ready, and discard them if this document is replaced.
-    window.addEventListener("pagehide", () => {
-        pendingCommands.length = 0;
-        if (bridgePoll !== undefined) window.clearTimeout(bridgePoll);
-        bridgePoll = undefined;
-        bridgePollAttempts = 0;
-    }, { once: true });
-
     return {
         dispatch(command) {
             const nativeChannel = window.embedderMessaging;
-            if (!nativeChannel) {
-                pendingCommands.push(command);
-                if (bridgePoll === undefined) {
-                    bridgePollAttempts = 0;
-                    bridgePoll = window.setTimeout(flushPendingCommands, 0);
-                }
-                return;
-            }
+            if (!nativeChannel)
+                throw new Error("Photon command API is unavailable without its trusted native messaging channel.");
             const { type, payload } = serializeNativeCommand(command);
             nativeChannel.postMessage(type, payload);
         },
@@ -124,6 +87,8 @@ export function createPhotonCommandTransport(): PhotonCommandTransport {
                     },
                 ],
                 ["photon-page-tooltip-clear", () => listener({ type: "page-tooltip-clear" })],
+                ["photon-page-crashed", () => listener({ type: "page-crashed" })],
+                ["photon-chrome-crashed", () => listener({ type: "chrome-crashed" })],
             ];
             for (const [name, handler] of handlers) window.addEventListener(name, handler);
             return () => {
@@ -159,7 +124,8 @@ function serializeNativeCommand(command: PhotonCommand): { type: string; payload
             return { type: command.kind, payload: { enabled: command.enabled } };
         case "set-window-tint-opacity":
             return { type: command.kind, payload: { opacity: command.opacity } };
-        case "window-start-system-move":
+        case "set-titlebar-drag-region":
+            return { type: command.kind, payload: { enabled: command.enabled } };
         case "window-minimize":
         case "window-maximize":
         case "window-toggle-maximize":
@@ -168,6 +134,7 @@ function serializeNativeCommand(command: PhotonCommand): { type: string; payload
         case "forward":
         case "reload":
         case "focus-address":
+        case "ui-ready":
         case "new-tab":
         case "open-settings":
             return { type: command.kind, payload: {} };

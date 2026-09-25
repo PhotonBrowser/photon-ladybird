@@ -56,7 +56,7 @@ export interface PhotonSettings {
 
 export interface PhotonWindow {
     platform: "macos" | "other";
-    beginDrag(): void;
+    setTitlebarDragRegion(enabled: boolean): void;
     minimize(): void;
     maximize(): void;
     toggleMaximize(): void;
