@@ -129,13 +129,17 @@ function isBrowserSnapshot(value: unknown): value is BrowserSnapshot {
 const darkThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
 // `system` is resolved to a concrete value here rather than in CSS, so the
-// stylesheet carries a single dark palette instead of one per colour-scheme
-// source that has to be kept in sync by hand.
+// stylesheet needs only a single dark palette instead of one dark block per
+// colour-scheme source that has to be kept in sync by hand.
 function applyTheme(mode: ThemeMode): void {
-    const resolved = mode === "system" && darkThemeQuery.matches ? "dark" : mode === "system" ? "light" : mode;
+    const resolved = mode === "dark" || (mode === "system" && darkThemeQuery.matches) ? "dark" : "light";
     document.documentElement.dataset.theme = resolved;
 }
 
+// Keep following the OS while the theme is "system". Ladybird re-evaluates media
+// queries and dispatches "change" on preference changes such as force-dark;
+// an OS colour-scheme switch does not reach the document yet, so the initial
+// read above is what resolves "system" for the lifetime of the window.
 darkThemeQuery.addEventListener("change", () => {
     if (snapshot.themeMode === "system") applyTheme(snapshot.themeMode);
 });
