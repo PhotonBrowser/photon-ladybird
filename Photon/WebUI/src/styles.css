@@ -374,6 +374,22 @@ button {
         scale var(--photon-motion-fast) var(--photon-ease-standard);
 }
 
+.photon-tab-entering {
+    animation: photon-tab-expand 180ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+@keyframes photon-tab-expand {
+    from {
+        flex-basis: 0;
+        flex-grow: 0;
+    }
+
+    to {
+        flex-basis: var(--photon-tab-default-width);
+        flex-grow: 0;
+    }
+}
+
 .photon-tab-tooltip {
     display: flex;
     width: max-content;
@@ -464,6 +480,9 @@ button {
     height: var(--photon-icon-size-sm);
     border-radius: var(--photon-radius-icon);
     object-fit: contain;
+    /* Favicons are authored for light backgrounds (e.g. chatgpt.com's black
+       mark). Keep a light tile so dark marks stay visible on dark chrome. */
+    background-color: #ffffff;
 }
 
 .photon-tab-title {
