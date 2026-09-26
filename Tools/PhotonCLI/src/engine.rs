@@ -137,6 +137,148 @@ pub(crate) fn verify_edit_tree_with_series(repository: &Path, tree: &Path, patch
     verify_tree_with_series(repository, tree, patches)
 }
 
+pub(crate) fn verify_build_tree_with_series(repository: &Path, patches: &[Patch]) -> Result<()> {
+    verify_tree_with_series(repository, &build_tree(repository), patches)
+}
+
+/// Keep a matching tree, safely reconcile a known omitted patch, or discard a
+/// build tree that still matches the old series.
+pub(crate) fn prepare_build_tree_for_capture(
+    repository: &Path,
+    old_patches: &[Patch],
+    new_patches: &[Patch],
+) -> Result<()> {
+    let tree = build_tree(repository);
+    if !tree.exists() {
+        return Ok(());
+    }
+
+    if verify_tree_with_series(repository, &tree, new_patches).is_ok() {
+        return Ok(());
+    }
+
+    if verify_tree_with_series(repository, &tree, old_patches).is_ok() {
+        return discard_build_tree(repository);
+    }
+
+    if reconcile_tree_with_one_missing_patch(repository, &tree, new_patches)? {
+        return Ok(());
+    }
+
+    bail!("generated build source matches neither the current nor proposed patch series")
+}
+
+/// Reconcile a tree only when every patch-owned file exactly matches the
+/// proposed series with one registered patch omitted.
+fn reconcile_tree_with_one_missing_patch(repository: &Path, tree: &Path, patches: &[Patch]) -> Result<bool> {
+    let paths = patches::patch_paths(repository, patches)?;
+    if paths.is_empty() {
+        return Ok(false);
+    }
+
+    let upstream = metadata::read_upstream(&repository.join("Meta/Photon/upstream.toml"))?;
+    if git_output(tree, &["rev-parse", "HEAD"])? != upstream.revision {
+        return Ok(false);
+    }
+    let full = materialize_for_comparison(repository, &upstream.revision, patches)?;
+    let differing_paths = differing_materialized_paths(&full, tree, &paths);
+    fs::remove_dir_all(&full)?;
+    let differing_paths = differing_paths?;
+    if differing_paths.is_empty() {
+        return Ok(false);
+    }
+
+    for omitted_index in (0..patches.len()).rev() {
+        let omitted_patch_paths = patches::patch_paths(repository, &[patches[omitted_index].clone()])?;
+        if !differing_paths.iter().all(|path| omitted_patch_paths.contains(path)) {
+            continue;
+        }
+
+        let mut subset = patches.to_vec();
+        subset.remove(omitted_index);
+        let expected = match materialize_for_comparison(repository, &upstream.revision, &subset) {
+            Ok(expected) => expected,
+            Err(_) => continue,
+        };
+        let matches = differing_materialized_paths(&expected, tree, &paths);
+        fs::remove_dir_all(&expected)?;
+        let matches = matches?.is_empty();
+        if !matches {
+            continue;
+        }
+
+        verify_tree_status_paths(tree, &paths)?;
+        let mut affected_paths = patches::patch_paths(repository, &subset)?;
+        affected_paths.extend(paths);
+        reconcile_tree_patch_series(repository, tree, patches, &affected_paths)?;
+        verify_tree_with_series(repository, tree, patches)?;
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
+fn materialize_for_comparison(repository: &Path, revision: &str, patches: &[Patch]) -> Result<PathBuf> {
+    let temporary = std::env::temp_dir().join(format!("photon-tree-check-{}", std::process::id()));
+    if temporary.exists() {
+        fs::remove_dir_all(&temporary)?;
+    }
+    fs::create_dir(&temporary)?;
+    if let Err(error) = patches::check_in(repository, &temporary, revision, patches) {
+        fs::remove_dir_all(&temporary)?;
+        return Err(error);
+    }
+    Ok(temporary)
+}
+
+fn differing_materialized_paths(expected: &Path, actual: &Path, paths: &HashSet<PathBuf>) -> Result<Vec<PathBuf>> {
+    let mut differing_paths = Vec::new();
+    for path in paths {
+        let expected_contents = read_optional_file(&expected.join(path))?;
+        let actual_contents = read_optional_file(&actual.join(path))?;
+        if expected_contents != actual_contents {
+            differing_paths.push(path.clone());
+        }
+    }
+    Ok(differing_paths)
+}
+
+fn read_optional_file(path: &Path) -> Result<Option<Vec<u8>>> {
+    match fs::read(path) {
+        Ok(contents) => Ok(Some(contents)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn verify_tree_status_paths(tree: &Path, owned_paths: &HashSet<PathBuf>) -> Result<()> {
+    let status = Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=all"])
+        .current_dir(tree)
+        .output()?;
+    if !status.status.success() {
+        bail!("failed to inspect {}", tree.display());
+    }
+
+    for line in String::from_utf8_lossy(&status.stdout).lines() {
+        let Some(path) = line.get(3..) else { continue };
+        let path = Path::new(path.trim());
+        if !owned_paths.contains(path)
+            && !path.starts_with("Photon")
+            && !path.starts_with("Patches")
+            && path != Path::new("Meta/Photon")
+            && path != Path::new("Build")
+        {
+            bail!(
+                "{} contains unrepresented engine edits at {}",
+                tree.display(),
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Replace the patch materialization in existing generated trees without
 /// removing their source worktrees or build directories.
 pub(crate) fn refresh_generated_patch_series(
@@ -685,32 +827,8 @@ fn verify_tree_with_series(repository: &Path, tree: &Path, patches: &[Patch]) ->
     }
     patches::verify_materialized_files(tree, patches)?;
 
-    let status = Command::new("git")
-        .args(["status", "--porcelain", "--untracked-files=all"])
-        .current_dir(tree)
-        .output()?;
-    if !status.status.success() {
-        bail!("failed to inspect {}", tree.display());
-    }
-    let paths = String::from_utf8_lossy(&status.stdout);
     let owned = patches::patch_paths(repository, patches)?;
-    for line in paths.lines() {
-        let Some(path) = line.get(3..) else { continue };
-        let path = Path::new(path.trim());
-        if !owned.contains(path)
-            && !path.starts_with("Photon")
-            && !path.starts_with("Patches")
-            && path != Path::new("Meta/Photon")
-            && path != Path::new("Build")
-        {
-            bail!(
-                "{} contains unrepresented engine edits at {}",
-                tree.display(),
-                path.display()
-            );
-        }
-    }
-    Ok(())
+    verify_tree_status_paths(tree, &owned)
 }
 
 fn build_tree(repository: &Path) -> PathBuf {

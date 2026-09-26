@@ -1,0 +1,94 @@
+--- a/UI/Qt/WebContentView.h
++++ b/UI/Qt/WebContentView.h
+@@ -25,4 +25,5 @@
+ #include <LibWeb/Page/QueuedInputEvent.h>
++#include <QColor>
+ #include <QPixmap>
+ #include <QTimer>
+ #include <QUrl>
+@@ -112,6 +113,12 @@
+     virtual bool event(QEvent*) override;
+ 
+     void set_viewport_rect(Gfx::IntRect);
++#if !defined(LADYBIRD_QT_USE_RHI_WIDGET) && !defined(LADYBIRD_QT_USE_VULKAN_WINDOW)
++    // Round the view's displayed viewport at the native presentation boundary.
++    // This clips presentation only; document layout keeps the full viewport.
++    void set_viewport_corner_radius(int radius);
++    void set_viewport_corner_background_color(QColor);
++#endif
+     // Allows a host scene to compose this view above another surface.
+     void set_transparent_background(bool);
+     void push_viewport_size();
+@@ -192,6 +198,10 @@
+ 
+     Gfx::IntSize m_viewport_size;
+     bool m_viewport_push_pending { false };
++#if !defined(LADYBIRD_QT_USE_RHI_WIDGET) && !defined(LADYBIRD_QT_USE_VULKAN_WINDOW)
++    int m_viewport_corner_radius { 0 };
++    QColor m_viewport_corner_background_color { Qt::transparent };
++#endif
+ 
+     u64 m_last_click_timestamp { 0 };
+     QPointF m_last_click_position;
+--- a/UI/Qt/WebContentView.cpp
++++ b/UI/Qt/WebContentView.cpp
+@@ -852,7 +852,28 @@
+ void WebContentView::paintEvent(QPaintEvent*)
+ {
+     QPainter painter(this);
++#if !defined(LADYBIRD_QT_USE_VULKAN_WINDOW)
++    if (m_viewport_corner_radius > 0) {
++        painter.setCompositionMode(QPainter::CompositionMode_Source);
++        painter.fillRect(rect(), Qt::transparent);
++        painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
++    }
++#endif
+     painter.scale(1 / m_device_pixel_ratio, 1 / m_device_pixel_ratio);
++#if !defined(LADYBIRD_QT_USE_VULKAN_WINDOW)
++    if (m_viewport_corner_radius > 0) {
++        painter.setRenderHint(QPainter::Antialiasing);
++        QPainterPath clip_path;
++        clip_path.addRoundedRect(
++            QRectF(0, 0, m_viewport_size.width(), m_viewport_size.height()),
++            m_viewport_corner_radius * m_device_pixel_ratio,
++            m_viewport_corner_radius * m_device_pixel_ratio);
++        QPainterPath viewport_path;
++        viewport_path.addRect(QRectF(0, 0, m_viewport_size.width(), m_viewport_size.height()));
++        painter.fillPath(viewport_path.subtracted(clip_path), m_viewport_corner_background_color);
++        painter.setClipPath(clip_path);
++    }
++#endif
+ 
+     auto paintable = current_paintable();
+     Gfx::Bitmap const* bitmap = nullptr;
+@@ -1137,6 +1158,30 @@
+     handle_resize();
+ }
+ 
++#if !defined(LADYBIRD_QT_USE_RHI_WIDGET) && !defined(LADYBIRD_QT_USE_VULKAN_WINDOW)
++void WebContentView::set_viewport_corner_radius(int radius)
++{
++    if (radius < 0)
++        radius = 0;
++    if (m_viewport_corner_radius == radius)
++        return;
++
++    m_viewport_corner_radius = radius;
++    setAttribute(Qt::WA_TranslucentBackground, radius > 0);
++    setAttribute(Qt::WA_NoSystemBackground, radius > 0);
++    update();
++}
++
++void WebContentView::set_viewport_corner_background_color(QColor color)
++{
++    if (m_viewport_corner_background_color == color)
++        return;
++
++    m_viewport_corner_background_color = color;
++    update();
++}
++#endif
++
+ void WebContentView::set_transparent_background(bool transparent)
+ {
+     ViewImplementation::set_transparent_background(transparent);

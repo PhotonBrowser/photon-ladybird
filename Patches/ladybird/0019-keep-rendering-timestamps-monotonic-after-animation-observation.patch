@@ -1,0 +1,110 @@
+--- a/Libraries/LibWeb/DOM/Document.cpp
++++ b/Libraries/LibWeb/DOM/Document.cpp
+@@ -8083,8 +8083,10 @@
+     if (effects_to_synchronize.is_empty())
+         return;
+ 
+-    auto timestamp = HighResolutionTime::relative_high_resolution_time(
+-        HighResolutionTime::unsafe_shared_current_time(), relevant_settings_object().global_object());
++    auto shared_timestamp = HighResolutionTime::unsafe_shared_current_time();
++    auto& settings = relevant_settings_object();
++    auto timestamp = HighResolutionTime::relative_high_resolution_time(shared_timestamp, settings.global_object());
++    settings.responsible_event_loop().ensure_rendering_timestamp_at_least(shared_timestamp);
+     auto timelines_to_update = GC::RootVector { m_associated_animation_timelines.values() };
+     for (auto const& timeline : timelines_to_update)
+         timeline->update_current_time(timestamp);
+--- a/Libraries/LibWeb/HTML/EventLoop/EventLoop.cpp
++++ b/Libraries/LibWeb/HTML/EventLoop/EventLoop.cpp
+@@ -281,10 +281,7 @@
+     // FIXME: 1. Wait until at least one navigable whose active document's relevant agent's event loop is eventLoop might have a rendering opportunity.
+ 
+     // 2. Set eventLoop's last render opportunity time to the unsafe shared current time.
+-    // INTEROP: Compositor-provided display timestamps match the shared monotonic clock. Clamp delayed or out-of-order
+-    //          IPC delivery so rendering timestamps remain monotonic and never describe a future frame.
+-    auto now = HighResolutionTime::unsafe_shared_current_time();
+-    m_last_render_opportunity_time = max(m_last_render_opportunity_time, min(frame_time, now));
++    ensure_rendering_timestamp_at_least(frame_time);
+ 
+     // AD-HOC: A nested event loop can deliver a timer while a rendering update is running. Keep the request pending
+     //         so the PageClient can schedule it for the next opportunity instead of queueing a second rendering task.
+@@ -326,6 +323,14 @@
+     return true;
+ }
+ 
++void EventLoop::ensure_rendering_timestamp_at_least(HighResolutionTime::DOMHighResTimeStamp timestamp)
++{
++    // INTEROP: Compositor-provided display timestamps can arrive late or out of order. Also keep them from going
++    //          behind a timeline that was synchronized directly while processing an event listener.
++    auto now = HighResolutionTime::unsafe_shared_current_time();
++    m_last_render_opportunity_time = max(m_last_render_opportunity_time, min(timestamp, now));
++}
++
+ void EventLoop::process_input_events() const
+ {
+     auto process_input_events_queue = [&](Page& page) {
+--- a/Libraries/LibWeb/HTML/EventLoop/EventLoop.h
++++ b/Libraries/LibWeb/HTML/EventLoop/EventLoop.h
+@@ -91,6 +91,7 @@
+         Manual,
+     };
+     bool rendering_opportunity(HighResolutionTime::DOMHighResTimeStamp frame_time, RenderingOpportunitySource);
++    void ensure_rendering_timestamp_at_least(HighResolutionTime::DOMHighResTimeStamp);
+     bool rendering_task_queued_or_running() const { return m_rendering_task_queued || m_running_rendering_task; }
+     bool running_synchronous_rendering_update() const { return m_running_synchronous_rendering_update; }
+ 
+--- /dev/null
++++ b/Tests/LibWeb/Text/expected/WebAnimations/misc/monotonic-timeline-after-event-observation.txt
+@@ -0,0 +1 @@
++rendering timestamp is not behind the observed document timeline: true
+--- /dev/null
++++ b/Tests/LibWeb/Text/input/WebAnimations/misc/monotonic-timeline-after-event-observation.html
+@@ -0,0 +1,49 @@
++<!DOCTYPE html>
++<style>
++    @keyframes spin {
++        to { transform: rotate(1turn); }
++    }
++
++    #animated {
++        width: 20px;
++        height: 20px;
++        animation: spin 1s linear 5s infinite;
++    }
++</style>
++<div id="animated"></div>
++<script src="../../include.js"></script>
++<script>
++    function nextTask() {
++        const { promise, resolve } = Promise.withResolvers();
++        const channel = new MessageChannel();
++        channel.port1.onmessage = resolve;
++        channel.port2.postMessage(null);
++        return promise;
++    }
++
++    asyncTest(async done => {
++        internals.setManualRenderingOpportunities(true);
++        await nextTask();
++        animated.getAnimations();
++
++        const firstFrameTime = performance.now();
++        internals.injectRenderingOpportunity(firstFrameTime);
++        await nextTask();
++        internals.injectRenderingOpportunity(firstFrameTime + 16);
++        await nextTask();
++
++        await new Promise(resolve => setTimeout(resolve, 100));
++        document.addEventListener("animationstart", () => {});
++        const synchronizedTimelineTime = document.timeline.currentTime;
++        let renderingCallbackTime;
++        requestAnimationFrame(timestamp => renderingCallbackTime = timestamp);
++
++        // Simulate a compositor opportunity queued before listener registration but delivered afterward.
++        internals.injectRenderingOpportunity(firstFrameTime + 17);
++        await nextTask();
++        internals.setManualRenderingOpportunities(false);
++
++        println(`rendering timestamp is not behind the observed document timeline: ${renderingCallbackTime >= synchronizedTimelineTime}`);
++        done();
++    });
++</script>

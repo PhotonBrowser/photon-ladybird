@@ -295,9 +295,29 @@ pub fn capture(repository: &Path, name: &str, area: &str) -> Result<i32> {
         Command::new("git").arg("apply").arg(&candidate).current_dir(&baseline),
         "apply captured changes to the temporary series checkout",
     )?;
-    crate::engine::discard_build_tree(repository)?;
 
-    fs::write(&patch_file, patch_contents)?;
+    let new_patch = Patch {
+        id: id.clone(),
+        file: file.clone(),
+        description: name.to_owned(),
+        area: area.to_owned(),
+        enabled: true,
+    };
+    let mut updated_patches = patches.clone();
+    updated_patches.push(new_patch);
+
+    // Generated trees may already contain the exact edits being captured. Keep
+    // them when they match the proposed series; only discard a build tree after
+    // proving it still matches the old series.
+    fs::write(&patch_file, &patch_contents)?;
+    if let Err(error) = crate::engine::verify_edit_tree_with_series(repository, &edit_tree, &updated_patches)
+        .and_then(|()| crate::engine::prepare_build_tree_for_capture(repository, &patches, &updated_patches))
+    {
+        fs::remove_file(&patch_file).context("failed to remove unregistered candidate patch")?;
+        fs::remove_dir_all(&temporary).context("failed to remove temporary patch capture files")?;
+        return Err(error);
+    }
+
     let series_file = repository.join("Patches/series.toml");
     let mut manifest = fs::read_to_string(&series_file)?;
     manifest.push_str(&format!(
@@ -309,6 +329,9 @@ pub fn capture(repository: &Path, name: &str, area: &str) -> Result<i32> {
 
     let updated_patches = series(repository)?;
     crate::engine::verify_edit_tree_with_series(repository, &edit_tree, &updated_patches)?;
+    if crate::engine::has_build_tree(repository) {
+        crate::engine::verify_build_tree_with_series(repository, &updated_patches)?;
+    }
     fs::remove_dir_all(&temporary).context("failed to remove temporary patch capture files")?;
 
     ui::header("Photon", Some("Patch captured"));

@@ -101,3 +101,15 @@ id = "0017"
 file = "ladybird/0017-strengthen-dirty-layout-hit-test-regression.patch"
 description = "strengthen dirty-layout hit-test regression"
 area = "Input handling"
+
+[[patches]]
+id = "0018"
+file = "ladybird/0018-round-webcontent-viewport.patch"
+description = "Clip the WebContent view to a rounded viewport"
+area = "Rendering integration"
+
+[[patches]]
+id = "0019"
+file = "ladybird/0019-keep-rendering-timestamps-monotonic-after-animation-observation.patch"
+description = "Keep rendering timestamps monotonic after animation observation"
+area = "Web Animations"
